@@ -2,7 +2,7 @@
 
 Laravel 12 API for the Enterprise ERP. Modular monolith with DDD.
 
-> **Read [`CLAUDE.md`](./CLAUDE.md) (and through it the canonical [`../CLAUDE.md`](../CLAUDE.md)) before contributing.**
+> **Read the canonical [`../CLAUDE.md`](../CLAUDE.md) at the workspace root before contributing.** It captures the locked tech stack, architectural rules, agent rules, and the build order for the whole ERP.
 
 The frontend SPA lives in a sibling repository under [`../frontend/`](../frontend) and talks to this API via `/api/v1/*` (Sanctum SPA + credentialed cookies).
 
