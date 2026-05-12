@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Providers;
 
+use App\Support\Audit\AuditContext;
 use App\Support\Tenancy\TenantContext;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
@@ -19,6 +20,15 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->scoped(TenantContext::class);
+
+        // AuditContext: lazy per-request snapshot of actor + IP + user-agent.
+        // Always built via fromCurrentRequest — that factory handles all the
+        // cases (no auth → null actor, no real request → null IP/UA, fake
+        // request in tests → captured correctly). Console commands that need
+        // actor_type='system' can rebind explicitly via app()->instance(...).
+        // Don't gate on runningInConsole — Pest counts as console even when
+        // actingAs($user) has populated Auth.
+        $this->app->scoped(AuditContext::class, fn () => AuditContext::fromCurrentRequest());
     }
 
     public function boot(): void
@@ -48,7 +58,7 @@ class AppServiceProvider extends ServiceProvider
      */
     private function resetSpatieTeamIdBetweenQueueJobs(): void
     {
-        Event::listen(function (JobProcessing $event): void {
+        Event::listen(JobProcessing::class, function (): void {
             app(PermissionRegistrar::class)->setPermissionsTeamId(null);
         });
     }
