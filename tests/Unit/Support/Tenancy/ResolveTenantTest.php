@@ -5,6 +5,7 @@ declare(strict_types=1);
 use App\Models\Tenant;
 use App\Models\User;
 use App\Support\Tenancy\Exceptions\TenantAccessDeniedException;
+use App\Support\Tenancy\Exceptions\TenantInactiveException;
 use App\Support\Tenancy\Middleware\ResolveTenant;
 use App\Support\Tenancy\TenantContext;
 use Illuminate\Http\Request;
@@ -67,16 +68,29 @@ it('throws 403 when the resolved tenant has been soft-deleted', function (): voi
         ->toThrow(TenantAccessDeniedException::class, 'does not exist');
 });
 
-it('throws 403 when the resolved tenant is suspended', function (): void {
+it('throws 401 with error_code=tenant_inactive when the resolved tenant is suspended', function (): void {
     $tenant = Tenant::factory()->suspended()->create();
     $user = User::factory()->forTenant($tenant)->create();
 
-    expect(fn () => runMiddleware($user))
-        ->toThrow(TenantAccessDeniedException::class, 'suspended');
+    try {
+        runMiddleware($user);
+        throw new RuntimeException('Expected TenantInactiveException, none thrown.');
+    } catch (TenantInactiveException $e) {
+        expect($e->getStatusCode())->toBe(401);
+        expect($e->errorCode)->toBe('tenant_inactive');
+        expect($e->getMessage())->toContain('suspended');
+    }
 });
 
 it('TenantAccessDeniedException renders as HTTP 403', function (): void {
     $exception = new TenantAccessDeniedException('test');
 
     expect($exception->getStatusCode())->toBe(403);
+});
+
+it('TenantInactiveException renders as HTTP 401 with tenant_inactive code', function (): void {
+    $exception = new TenantInactiveException('test');
+
+    expect($exception->getStatusCode())->toBe(401);
+    expect($exception->errorCode)->toBe('tenant_inactive');
 });

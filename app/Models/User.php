@@ -6,12 +6,14 @@ namespace App\Models;
 
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
 use App\Support\Tenancy\Concerns\BelongsToTenant;
+use App\Support\Tenancy\Concerns\HasTenantRoles;
 use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Support\Carbon;
+use Spatie\Permission\Traits\HasRoles;
 
 /**
  * @property int $id
@@ -22,6 +24,10 @@ use Illuminate\Support\Carbon;
  * @property Carbon|null $email_verified_at
  * @property string $password
  * @property string|null $remember_token
+ *
+ * @todo Add `locale` column (default 'en', accepts 'km') when Khmer translation
+ *       work begins. See docs/runbooks/i18n-pending.md for the migration sketch
+ *       and frontend Intl integration plan.
  */
 class User extends Authenticatable
 {
@@ -30,6 +36,8 @@ class User extends Authenticatable
     /** @use HasFactory<UserFactory> */
     use HasFactory;
 
+    use HasRoles;
+    use HasTenantRoles;
     use Notifiable;
 
     /** @var list<string> */

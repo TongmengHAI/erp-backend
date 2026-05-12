@@ -8,31 +8,38 @@ use App\Models\Tenant;
 use App\Models\User;
 use App\Support\Tenancy\Enums\TenantStatus;
 use App\Support\Tenancy\Exceptions\TenantAccessDeniedException;
+use App\Support\Tenancy\Exceptions\TenantInactiveException;
 use App\Support\Tenancy\TenantContext;
 use Closure;
 use Illuminate\Http\Request;
+use Spatie\Permission\PermissionRegistrar;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
  * Resolves the active tenant for an authenticated user and pins it into the
- * request-scoped TenantContext.
+ * request-scoped TenantContext + Spatie PermissionRegistrar.
  *
  * Resolution rule (slice 2 — pre-multi-tenant-membership):
  *   target = $user->current_tenant_id ?? $user->tenant_id
  *   then validate the target exists and has status=active.
  *
- * Unauthenticated requests pass through with no context set — the global
+ * Failure modes:
+ *   - User has no tenant ids set         → 403 TenantAccessDeniedException
+ *   - Tenant id points at nothing        → 403 TenantAccessDeniedException
+ *   - Tenant exists but is not active    → 401 TenantInactiveException
+ *                                          (error_code=tenant_inactive)
+ *
+ * Unauthenticated requests pass through with no context — the global
  * TenantScope will reject any tenant-scoped query they attempt, by design.
  *
- * Header-based tenant override (X-Tenant-Id) lands in slice 6 once
+ * Header-based tenant override (X-Tenant-Id) lands in a later slice once
  * user_tenant_roles makes "user belongs to multiple tenants" a real state.
- *
- * Not registered in any route group in this slice — slice 3 wires it in.
  */
 final class ResolveTenant
 {
     public function __construct(
         private readonly TenantContext $context,
+        private readonly PermissionRegistrar $registrar,
     ) {}
 
     public function handle(Request $request, Closure $next): Response
@@ -40,7 +47,9 @@ final class ResolveTenant
         $user = $request->user();
 
         if ($user instanceof User) {
-            $this->context->setCurrent($this->resolveFor($user));
+            $tenant = $this->resolveFor($user);
+            $this->context->setCurrent($tenant);
+            $this->registrar->setPermissionsTeamId($tenant->id);
         }
 
         return $next($request);
@@ -48,6 +57,7 @@ final class ResolveTenant
 
     /**
      * @throws TenantAccessDeniedException
+     * @throws TenantInactiveException
      */
     private function resolveFor(User $user): Tenant
     {
@@ -69,7 +79,7 @@ final class ResolveTenant
         }
 
         if ($tenant->status !== TenantStatus::Active) {
-            throw new TenantAccessDeniedException(
+            throw new TenantInactiveException(
                 sprintf('Tenant %s is %s.', $tenant->slug, $tenant->status->value)
             );
         }
