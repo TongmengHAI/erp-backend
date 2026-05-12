@@ -42,27 +42,34 @@ use Illuminate\Database\Eloquent\SoftDeletes;
  *   - 'updated_at' (noisy, redundant with audit_logs.created_at)
  *   - every key in $hidden (passwords, tokens — never audited)
  *
- * Setting BOTH at once throws AuditConfigurationException at boot (fail loud, §G).
+ * Setting BOTH at once throws AuditConfigurationException on first audit
+ * write for that class (fail loud, §G). Checked lazily, once per class,
+ * via a static cache — avoids `new static()` which is unsafe in traits
+ * (we don't know subclass constructors).
  *
  * Audit writes are synchronous and inside the parent transaction. Failure
  * throws AuditWriteFailedException and rolls back the business write.
  */
 trait Auditable
 {
+    /**
+     * Classes whose audit configuration has been validated. Populated lazily
+     * on first audit write per class. Avoids re-validating on every write.
+     *
+     * @var array<class-string, true>
+     */
+    private static array $auditConfigCheckedClasses = [];
+
     public static function bootAuditable(): void
     {
-        // ─── Boot-time configuration check (§G — fail loud, not silent) ───
-        $instance = new static;
-        if ($instance->auditOnly() !== null && $instance->auditExcept() !== null) {
-            throw new AuditConfigurationException(static::class);
-        }
-
-        // ─── Event hooks ──────────────────────────────────────────────────
         // Intentionally no `restored` hook — see class docblock. Restore is
         // detected inside writeAuditOnUpdated before Eloquent's finishSave
         // syncs the original attributes and loses the previous deleted_at value.
+        // @phpstan-ignore method.notFound (trait methods on Model — analyzer can't see them)
         static::created(static fn (Model $m) => $m->writeAuditOnCreated());
+        // @phpstan-ignore method.notFound
         static::updated(static fn (Model $m) => $m->writeAuditOnUpdated());
+        // @phpstan-ignore method.notFound
         static::deleted(static fn (Model $m) => $m->writeAuditOnDeleted());
     }
 
@@ -91,6 +98,8 @@ trait Auditable
 
     public function writeAuditOnCreated(): void
     {
+        $this->assertAuditConfigurationOnce();
+
         AuditWriter::record(
             model: $this,
             action: 'created',
@@ -101,9 +110,11 @@ trait Auditable
 
     public function writeAuditOnUpdated(): void
     {
+        $this->assertAuditConfigurationOnce();
+
         $dirty = $this->getDirty();
         if ($dirty === []) {
-            return; // no-op save — Eloquent fires updated even when nothing changed
+            return;
         }
 
         // Restore detection — deleted_at went from timestamp → null and that's
@@ -138,7 +149,7 @@ trait Auditable
         $after = $this->filterAttributesForAudit($afterRaw);
 
         if ($after === []) {
-            return; // every dirty field was filtered out — nothing to record
+            return;
         }
 
         AuditWriter::record(
@@ -151,21 +162,28 @@ trait Auditable
 
     public function writeAuditOnDeleted(): void
     {
-        $isSoftDelete = method_exists($this, 'isForceDeleting') && ! $this->isForceDeleting();
+        $this->assertAuditConfigurationOnce();
 
-        if ($isSoftDelete) {
-            // SoftDeletes::runSoftDelete writes via a raw query (no save() →
-            // no `updated` event), so this is the ONLY hook that fires for a
-            // soft delete. Captures the deleted_at transition explicitly.
-            $deletedAt = $this->getAttribute('deleted_at');
-            AuditWriter::record(
-                model: $this,
-                action: 'soft_deleted',
-                before: ['deleted_at' => null],
-                after: ['deleted_at' => $this->castDeletedAt($deletedAt)],
-            );
+        $usesSoftDeletes = in_array(SoftDeletes::class, class_uses_recursive(static::class), true);
 
-            return;
+        if ($usesSoftDeletes) {
+            // isForceDeleting() comes from the SoftDeletes trait — only callable
+            // when the using class actually has that trait, which the runtime
+            // check above guarantees. PHPStan analyses the trait in isolation
+            // and can't see that constraint.
+            // @phpstan-ignore method.notFound
+            $isForceDeleting = $this->isForceDeleting();
+            if (! $isForceDeleting) {
+                $deletedAt = $this->getAttribute('deleted_at');
+                AuditWriter::record(
+                    model: $this,
+                    action: 'soft_deleted',
+                    before: ['deleted_at' => null],
+                    after: ['deleted_at' => $this->castDeletedAt($deletedAt)],
+                );
+
+                return;
+            }
         }
 
         // Hard delete — capture full filtered state because there is no "diff."
@@ -200,9 +218,29 @@ trait Auditable
     }
 
     /**
+     * Check the configuration once per class. Cheap second/Nth call (array lookup).
+     * Throws if auditOnly() AND auditExcept() are both set — boot would be
+     * preferable but `new static()` is unsafe in traits per PHPStan, and we
+     * need an instance to invoke the override methods.
+     */
+    private function assertAuditConfigurationOnce(): void
+    {
+        $class = static::class;
+        if (isset(self::$auditConfigCheckedClasses[$class])) {
+            return;
+        }
+
+        if ($this->auditOnly() !== null && $this->auditExcept() !== null) {
+            throw new AuditConfigurationException($class);
+        }
+
+        self::$auditConfigCheckedClasses[$class] = true;
+    }
+
+    /**
      * Normalise a deleted_at value (Carbon|string|null) to an ISO 8601 string
-     * for JSONB storage. The value can arrive as either Carbon (already cast)
-     * or string (pre-save), depending on which Eloquent event fired.
+     * for JSONB storage. The value can arrive as Carbon (already cast) or
+     * string (pre-save), depending on which Eloquent event fired.
      */
     private function castDeletedAt(mixed $value): ?string
     {

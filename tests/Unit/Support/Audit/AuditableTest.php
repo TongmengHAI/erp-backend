@@ -165,10 +165,11 @@ it('respects $auditOnly as an explicit allowlist that overrides defaults', funct
     expect($row->after)->not->toHaveKey('internal_notes');
 });
 
-it('throws AuditConfigurationException when both $auditOnly and $auditExcept are declared', function (): void {
-    // This is the ONLY test that touches AuditTestWidgetMisconfigured (boot throws
-    // and leaves the class in an undefined state — see fixture docblock).
-    expect(fn () => new AuditTestWidgetMisconfigured)
+it('throws AuditConfigurationException on first audit write when both $auditOnly and $auditExcept are declared', function (): void {
+    // The check runs lazily on first audit write per class (not at instantiation —
+    // the refactor moved it off `new static()` which PHPStan flagged as unsafe).
+    // ONLY test that touches AuditTestWidgetMisconfigured.
+    expect(fn () => AuditTestWidgetMisconfigured::create(['name' => 'first']))
         ->toThrow(AuditConfigurationException::class, '$auditOnly');
 });
 

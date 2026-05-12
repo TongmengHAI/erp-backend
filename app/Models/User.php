@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Models;
 
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
+use App\Support\Audit\Concerns\Auditable;
 use App\Support\Tenancy\Concerns\BelongsToTenant;
 use App\Support\Tenancy\Concerns\HasTenantRoles;
 use Database\Factories\UserFactory;
@@ -31,6 +32,7 @@ use Spatie\Permission\Traits\HasRoles;
  */
 class User extends Authenticatable
 {
+    use Auditable;
     use BelongsToTenant;
 
     /** @use HasFactory<UserFactory> */

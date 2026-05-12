@@ -15,13 +15,6 @@ parameters:
     checkOctaneCompatibility: false
     checkModelProperties: true
     ignoreErrors:
-        # Auditable has no production consumer yet (this slice ships the
-        # mechanism; commit 3 of the same slice applies it to User + Tenant
-        # and removes this ignore). Test fixtures use it but tests/ are
-        # excluded from PHPStan analysis.
-        -
-            identifier: trait.unused
-            path: app/Support/Audit/Concerns/Auditable.php
         # Larastan v3 wants array<model property of X, mixed> on Factory::definition.
         # array<string, mixed> is functionally identical but the variance trips the check.
         # Switch to Larastan's model-property generic when we stabilize on a factory PHPDoc style.

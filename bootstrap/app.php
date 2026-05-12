@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Support\Audit\Console\CreateAuditPartitionsCommand;
 use App\Support\Tenancy\Exceptions\TenantInactiveException;
 use App\Support\Tenancy\Middleware\ResolveTenant;
 use Illuminate\Foundation\Application;
@@ -17,6 +18,11 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
         apiPrefix: 'api/v1',
     )
+    // Console commands outside app/Console/Commands/ need explicit registration.
+    // Our domain layout (§5.1) puts framework commands under app/Support/<X>/Console/.
+    ->withCommands([
+        CreateAuditPartitionsCommand::class,
+    ])
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->statefulApi();
         $middleware->alias([

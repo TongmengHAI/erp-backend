@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Models;
 
+use App\Support\Audit\Concerns\Auditable;
 use App\Support\Tenancy\Enums\TenantStatus;
 use Database\Factories\TenantFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -24,6 +25,8 @@ use Illuminate\Database\Eloquent\SoftDeletes;
  */
 class Tenant extends Model
 {
+    use Auditable;
+
     /** @use HasFactory<TenantFactory> */
     use HasFactory;
 
