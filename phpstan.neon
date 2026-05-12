@@ -1,0 +1,31 @@
+includes:
+    - vendor/larastan/larastan/extension.neon
+
+parameters:
+    level: 8
+    paths:
+        - app
+        - database
+    excludePaths:
+        # Vendor-published migrations — owned by their packages, not us.
+        - database/migrations/*_create_personal_access_tokens_table.php
+        - database/migrations/*_create_telescope_entries_table.php
+        - database/migrations/*_create_pulse_tables.php
+    treatPhpDocTypesAsCertain: false
+    checkOctaneCompatibility: false
+    checkModelProperties: true
+    ignoreErrors:
+        # Laravel's UserFactory return-type contract is looser than Larastan v3 prefers.
+        # Tighten when we replace UserFactory with our domain-specific factories.
+        -
+            identifier: method.childReturnType
+            path: database/factories/UserFactory.php
+        # Auto-published Horizon/Telescope auth gates have an intentionally empty
+        # allowlist as scaffold state — populate when real admin emails exist (Step 1).
+        -
+            identifier: function.impossibleType
+            paths:
+                - app/Providers/HorizonServiceProvider.php
+                - app/Providers/TelescopeServiceProvider.php
+# Tests are excluded from level-8 analysis until Pest + PHPStan integration is wired up
+# (Pest's $this polymorphism breaks static method resolution). Revisit in Step 1.

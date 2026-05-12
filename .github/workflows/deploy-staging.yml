@@ -1,0 +1,40 @@
+name: Deploy — Staging
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [develop]
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: SSH deploy
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+      # url: https://staging.your-erp.example
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/develop'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # --- Skeleton only. Wire up once staging VPS exists. ---
+      # Steps will include:
+      #  - Setup PHP + composer install --no-dev --optimize-autoloader
+      #  - rsync to release dir on VPS
+      #  - php artisan migrate --force
+      #  - php artisan optimize
+      #  - Atomic symlink swap
+      #  - Reload PHP-FPM
+      #  - Restart Horizon supervisor
+      #  - Smoke test /up health endpoint
+      - name: Placeholder
+        run: |
+          echo "Staging backend deployment is not wired up yet."
+          echo "When the VPS is provisioned, replace this with the real rsync + symlink-swap steps."
+          exit 0
