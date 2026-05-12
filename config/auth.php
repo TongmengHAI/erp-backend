@@ -116,4 +116,25 @@ return [
 
     'password_timeout' => env('AUTH_PASSWORD_TIMEOUT', 10800),
 
+    /*
+    |--------------------------------------------------------------------------
+    | Timing-Attack Dummy Hash
+    |--------------------------------------------------------------------------
+    |
+    | Pre-computed bcrypt hash used by LoginController when the supplied email
+    | matches no user row. Hash::check runs against this dummy so the request
+    | takes the same wall-clock time as a real user + wrong password path,
+    | preventing user-enumeration via timing.
+    |
+    | Cost should match BCRYPT_ROUNDS (default 12). The plaintext is unknown
+    | by design (random salt + random 256-bit secret at generation time).
+    | The value is not a secret — it's published config.
+    |
+    */
+
+    'timing_dummy_hash' => env(
+        'AUTH_TIMING_DUMMY_HASH',
+        '$2y$12$xDz8oyy8tZMAxu.blF9zY.jk3Wnop/SmEaqy4ibvWqqk/nVx6Y9WO'
+    ),
+
 ];
