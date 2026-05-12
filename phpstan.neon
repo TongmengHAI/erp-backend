@@ -28,11 +28,5 @@ parameters:
             paths:
                 - app/Providers/HorizonServiceProvider.php
                 - app/Providers/TelescopeServiceProvider.php
-        # BelongsToTenant has no production consumer yet (slice 1 just establishes
-        # the mechanism; tests verify it). Production consumers land in slice 2+
-        # (User model membership, audit_logs, all domain models in steps 2-7).
-        -
-            identifier: trait.unused
-            path: app/Support/Tenancy/Concerns/BelongsToTenant.php
 # Tests are excluded from level-8 analysis until Pest + PHPStan integration is wired up
 # (Pest's $this polymorphism breaks static method resolution). Revisit in Step 1.

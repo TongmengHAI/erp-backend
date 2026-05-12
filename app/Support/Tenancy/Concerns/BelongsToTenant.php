@@ -56,6 +56,9 @@ trait BelongsToTenant
     /**
      * Bypass the global tenant scope and target a specific tenant explicitly.
      * Use for cross-tenant maintenance or admin queries.
+     *
+     * @param  Builder<$this>  $query
+     * @return Builder<$this>
      */
     public function scopeForTenant(Builder $query, int $tenantId): Builder
     {
@@ -66,6 +69,9 @@ trait BelongsToTenant
     /**
      * Bypass the global tenant scope entirely. Use sparingly — anywhere this
      * appears, cross-tenant data may flow.
+     *
+     * @param  Builder<$this>  $query
+     * @return Builder<$this>
      */
     public function scopeAcrossTenants(Builder $query): Builder
     {
