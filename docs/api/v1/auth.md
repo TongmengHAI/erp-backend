@@ -134,6 +134,37 @@ No request body. No query parameters.
 
 ---
 
+### `POST /api/v1/auth/logout`
+
+Destroy the authenticated session and roll a fresh CSRF token. Returns 204 No Content.
+
+**Lives outside the tenant-required group.** A user whose current tenant is suspended must still be able to log out — otherwise they'd be trapped in a `tenant_inactive` 401 loop.
+
+**Request**
+
+```http
+POST /api/v1/auth/logout HTTP/1.1
+Origin: https://app.example.com
+Cookie: <session cookie set by /auth/login>
+X-XSRF-TOKEN: <value from XSRF-TOKEN cookie>
+Accept: application/json
+```
+
+No request body.
+
+**Response — 204 No Content** (with `Set-Cookie` clearing/rotating the session cookie)
+
+**Errors**
+
+| Status | Body | Trigger |
+|---|---|---|
+| 401 | `{ "message": "Unauthenticated." }` | No session cookie, expired cookie, or invalid cookie |
+| 429 | `{ "message": "Too Many Attempts." }` | More than 30 requests/minute (IP-keyed). |
+
+After logout, subsequent calls to `GET /api/v1/auth/me` return 401 (no `error_code`) — the SPA should clear local `useAuthStore` state and route to `/login`.
+
+---
+
 ## Error code reference
 
 Stable `error_code` values returned in JSON error bodies. Frontend uses these to drive routing decisions; messages may change, codes are stable.
