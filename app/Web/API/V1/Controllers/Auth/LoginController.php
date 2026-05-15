@@ -7,7 +7,6 @@ namespace App\Web\API\V1\Controllers\Auth;
 use App\Models\Tenant;
 use App\Models\User;
 use App\Support\Tenancy\Enums\TenantStatus;
-use App\Support\Tenancy\Scopes\TenantScope;
 use App\Web\API\V1\Controllers\Controller;
 use App\Web\API\V1\Requests\Auth\LoginRequest;
 use App\Web\API\V1\Resources\TenantResource;
@@ -49,10 +48,10 @@ final class LoginController extends Controller
         // the codebase as published config and uses an unknown plaintext.
         // ============================================================================
 
-        $user = User::query()
-            ->withoutGlobalScope(TenantScope::class)
-            ->where('email', $email)
-            ->first();
+        // User is no longer tenant-scoped (see User model JSDoc), so no
+        // withoutGlobalScope is needed here — direct email lookup runs
+        // unscoped by design.
+        $user = User::query()->where('email', $email)->first();
 
         // Pick the inputs for the next two operations. Both branches feed into
         // the SAME Hash::check + SAME Tenant::find call below — only the values

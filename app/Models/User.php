@@ -6,7 +6,6 @@ namespace App\Models;
 
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
 use App\Support\Audit\Concerns\Auditable;
-use App\Support\Tenancy\Concerns\BelongsToTenant;
 use App\Support\Tenancy\Concerns\HasTenantRoles;
 use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -29,11 +28,18 @@ use Spatie\Permission\Traits\HasRoles;
  * @todo Add `locale` column (default 'en', accepts 'km') when Khmer translation
  *       work begins. See docs/runbooks/i18n-pending.md for the migration sketch
  *       and frontend Intl integration plan.
+ *
+ * Note: User does NOT use BelongsToTenant despite carrying `tenant_id`. Applying
+ * the global TenantScope here creates a circular dependency: auth resolution
+ * must load the user from the DB before ResolveTenant middleware can pin the
+ * tenant context, but the scope would demand the context to load the user.
+ * User is an identity-source model — it DEFINES tenant membership, it does not
+ * live within it. See CLAUDE.md §3 for the full rule. Queries that need
+ * "users in tenant X" must use `User::where('tenant_id', $tenantId)` explicitly.
  */
 class User extends Authenticatable
 {
     use Auditable;
-    use BelongsToTenant;
 
     /** @use HasFactory<UserFactory> */
     use HasFactory;
@@ -64,6 +70,17 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
         ];
+    }
+
+    /**
+     * Home tenant. Previously provided by the BelongsToTenant trait; declared
+     * explicitly here now that User is not tenant-scoped.
+     *
+     * @return BelongsTo<Tenant, $this>
+     */
+    public function tenant(): BelongsTo
+    {
+        return $this->belongsTo(Tenant::class);
     }
 
     /** @return BelongsTo<Tenant, $this> */

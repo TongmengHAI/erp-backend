@@ -149,3 +149,61 @@ it('tenant suspended mid-session: /me returns 401 tenant_inactive, logout still 
     // `tenant` middleware group precisely for this case (slice 7).
     $this->postJson('/api/v1/auth/logout')->assertNoContent();
 });
+
+it('regression: /me works after fresh auth resolution (User must NOT be tenant-scoped)', function (): void {
+    // ─────────────────────────────────────────────────────────────────────────
+    // REGRESSION GUARD — surfaced during the F3 frontend integration smoke.
+    //
+    // Original bug: the User model used BelongsToTenant, which installed a
+    // global TenantScope that demanded a resolved tenant context for every
+    // User query. This created a circular dependency at auth time:
+    //
+    //   1. session cookie arrives, route protected by auth:sanctum
+    //   2. SessionGuard::user() → EloquentUserProvider::retrieveById()
+    //      → User::find()  ← TenantScope::apply() fires here
+    //   3. no tenant context yet (ResolveTenant runs AFTER auth resolves)
+    //   4. → TenantContextMissingException 500
+    //
+    // Why the original Step1 happy-path test missed it: tests use
+    // SESSION_DRIVER=array, the test client keeps the application in-process
+    // across postJson()/getJson() calls in the same test, and the
+    // SessionGuard's in-memory $user cache survives between sub-requests.
+    // So `$request->user()` returns the cached instance from the login
+    // request without hitting EloquentUserProvider::retrieveById(). Real
+    // HTTP gets a fresh Application bootstrap per request → forced DB
+    // re-resolution → triggers the bug.
+    //
+    // This test simulates real-HTTP behaviour by calling auth()->forgetGuards()
+    // between the login and /me requests, forcing the SessionGuard to drop
+    // its cached user. The next $request->user() goes through the full
+    // EloquentUserProvider path — same as a real production request.
+    //
+    // If User ever gets BelongsToTenant added back, this test will fail
+    // with a 500 (TenantContextMissingException) on the /me assertion.
+    // ─────────────────────────────────────────────────────────────────────────
+    $tenant = Tenant::factory()->create();
+    $user = User::factory()->forTenant($tenant)->create([
+        'password' => Hash::make('password'),
+    ]);
+    $user->assignTenantRole($tenant, 'accountant');
+
+    $this->postJson('/api/v1/auth/login', [
+        'email' => $user->email,
+        'password' => 'password',
+    ])->assertOk();
+
+    // Force fresh auth resolution: drop the SessionGuard's in-memory $user
+    // so the next request re-resolves the authenticated user from the
+    // session cookie via EloquentUserProvider::retrieveById() → User::find().
+    auth()->forgetGuards();
+
+    // /me must succeed under fresh resolution. If User has BelongsToTenant,
+    // this assertion fails with status=500 instead of 200.
+    $this->getJson('/api/v1/auth/me')->assertOk();
+
+    // /logout sits behind auth:sanctum only (no tenant middleware), but
+    // hits the same User::find path. Verify it works under fresh
+    // resolution too.
+    auth()->forgetGuards();
+    $this->postJson('/api/v1/auth/logout')->assertNoContent();
+});
