@@ -19,6 +19,8 @@ use Spatie\Permission\Traits\HasRoles;
  * @property int $id
  * @property int|null $tenant_id
  * @property int|null $current_tenant_id
+ * @property int|null $default_company_id
+ * @property int|null $current_company_id
  * @property string $name
  * @property string $email
  * @property Carbon|null $email_verified_at
@@ -55,6 +57,8 @@ class User extends Authenticatable
         'password',
         'tenant_id',
         'current_tenant_id',
+        'default_company_id',
+        'current_company_id',
     ];
 
     /** @var list<string> */
@@ -87,5 +91,28 @@ class User extends Authenticatable
     public function currentTenant(): BelongsTo
     {
         return $this->belongsTo(Tenant::class, 'current_tenant_id');
+    }
+
+    /**
+     * Preferred home company within the user's tenant. Set at user creation
+     * (when at least one company exists) or by BackfillUsersToCompanyAction.
+     *
+     * @return BelongsTo<Company, $this>
+     */
+    public function defaultCompany(): BelongsTo
+    {
+        return $this->belongsTo(Company::class, 'default_company_id');
+    }
+
+    /**
+     * Currently-active company within the user's tenant. Set by
+     * ResolveCompany middleware on each request (header → current →
+     * default → sole-fallback). Persists across sessions.
+     *
+     * @return BelongsTo<Company, $this>
+     */
+    public function currentCompany(): BelongsTo
+    {
+        return $this->belongsTo(Company::class, 'current_company_id');
     }
 }

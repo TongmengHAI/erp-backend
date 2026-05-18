@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Providers;
 
 use App\Support\Audit\AuditContext;
+use App\Support\Company\CompanyContext;
 use App\Support\Tenancy\TenantContext;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
@@ -20,6 +21,7 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->scoped(TenantContext::class);
+        $this->app->scoped(CompanyContext::class);
 
         // AuditContext: lazy per-request snapshot of actor + IP + user-agent.
         // Always built via fromCurrentRequest — that factory handles all the

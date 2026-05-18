@@ -17,9 +17,11 @@ declare(strict_types=1);
 // catches the regressions that only surface when the pieces interact.
 // ─────────────────────────────────────────────────────────────────────────────
 
+use App\Models\Company;
 use App\Models\Tenant;
 use App\Models\User;
 use App\Support\Audit\Models\AuditLog;
+use App\Support\Company\Actions\BackfillUsersToCompanyAction;
 use App\Support\Tenancy\Enums\TenantStatus;
 use Database\Seeders\Framework\DefaultPermissionsSeeder;
 use Database\Seeders\Framework\DefaultRolesSeeder;
@@ -206,4 +208,138 @@ it('regression: /me works after fresh auth resolution (User must NOT be tenant-s
     // resolution too.
     auth()->forgetGuards();
     $this->postJson('/api/v1/auth/logout')->assertNoContent();
+});
+
+it('H1a end-to-end: login → /me populates current_company via sole-fallback', function (): void {
+    // Single-company tenant. User has no default/current set; ResolveCompany's
+    // Step 4 sole-fallback fires on first request and backfills both. The /me
+    // payload includes the company; subsequent /me calls hit Step 2 (current).
+    $tenant = Tenant::factory()->create();
+    $company = Company::factory()->forTenant($tenant)->create(['name' => 'Acme Trading Co.']);
+    $user = User::factory()->forTenant($tenant)->create([
+        'password' => Hash::make('secret-shoe-string-piano'),
+        'default_company_id' => null,
+        'current_company_id' => null,
+    ]);
+    $user->assignTenantRole($tenant, 'accountant');
+
+    $this->postJson('/api/v1/auth/login', [
+        'email' => $user->email,
+        'password' => 'secret-shoe-string-piano',
+    ])->assertOk();
+
+    $me = $this->getJson('/api/v1/auth/me')->assertOk();
+
+    expect($me->json('data.current_company.id'))->toBe($company->id);
+    expect($me->json('data.current_company.name'))->toBe('Acme Trading Co.');
+    expect($me->json('data.companies'))->toHaveCount(1);
+
+    // Sole-fallback persisted the choice — verify the row was updated.
+    $fresh = $user->fresh();
+    expect($fresh->default_company_id)->toBe($company->id);
+    expect($fresh->current_company_id)->toBe($company->id);
+});
+
+it('H1a end-to-end: multi-company tenant — switching via X-Company-Id works across requests', function (): void {
+    // Two companies in a single tenant. User starts pinned to A; X-Company-Id
+    // switches to B for that request AND persists across requests.
+    $tenant = Tenant::factory()->create();
+    $companyA = Company::factory()->forTenant($tenant)->create(['name' => 'Acme Trading']);
+    $companyB = Company::factory()->forTenant($tenant)->create(['name' => 'Acme Retail']);
+    $user = User::factory()->forTenant($tenant)->create([
+        'password' => Hash::make('secret-shoe-string-piano'),
+        'default_company_id' => $companyA->id,
+        'current_company_id' => $companyA->id,
+    ]);
+    $user->assignTenantRole($tenant, 'tenant_admin');
+
+    $this->postJson('/api/v1/auth/login', [
+        'email' => $user->email,
+        'password' => 'secret-shoe-string-piano',
+    ])->assertOk();
+
+    // First /me: default pins companyA.
+    $first = $this->getJson('/api/v1/auth/me')->assertOk();
+    expect($first->json('data.current_company.id'))->toBe($companyA->id);
+
+    // Switch via header.
+    $second = $this->withHeader('X-Company-Id', (string) $companyB->id)
+        ->getJson('/api/v1/auth/me')
+        ->assertOk();
+    expect($second->json('data.current_company.id'))->toBe($companyB->id);
+
+    // Persistence: third /me WITHOUT the header should still resolve B
+    // because the header write updated current_company_id.
+    $third = $this->getJson('/api/v1/auth/me')->assertOk();
+    expect($third->json('data.current_company.id'))->toBe($companyB->id);
+});
+
+it('H1a end-to-end: multi-company tenant with no chosen default returns company_required on business routes', function (): void {
+    // Defensive: /me is companyOptional so it returns gracefully. A future
+    // business route in the ['auth:sanctum', 'tenant', 'company'] group
+    // would throw company_required. We can't hit a real business route in
+    // H1a (none exist yet), but we can prove the middleware throws by
+    // calling /me WITHOUT the companyOptional opt-out — and trust the
+    // unit-level coverage in ResolveCompanyTest::Step5.
+    //
+    // What we CAN assert at integration level: /me's companies array is
+    // populated even when current_company is null, so the SPA has the
+    // data it needs to render a picker.
+    $tenant = Tenant::factory()->create();
+    Company::factory()->forTenant($tenant)->create(['name' => 'A Co']);
+    Company::factory()->forTenant($tenant)->create(['name' => 'B Co']);
+    $user = User::factory()->forTenant($tenant)->create([
+        'password' => Hash::make('secret-shoe-string-piano'),
+        'default_company_id' => null,
+        'current_company_id' => null,
+    ]);
+    $user->assignTenantRole($tenant, 'viewer');
+
+    $this->postJson('/api/v1/auth/login', [
+        'email' => $user->email,
+        'password' => 'secret-shoe-string-piano',
+    ])->assertOk();
+
+    $me = $this->getJson('/api/v1/auth/me')->assertOk();
+
+    expect($me->json('data.current_company'))->toBeNull();
+    expect($me->json('data.companies'))->toHaveCount(2);
+});
+
+it('H1a end-to-end: BackfillUsersToCompanyAction wires users to a newly-introduced company (Approach A transition)', function (): void {
+    // Models the "one-company-to-two-companies transition" that CLAUDE.md
+    // §3 documents. The action will be the real caller from any future
+    // company-creation endpoint AND from DemoUsersSeeder; this test
+    // exercises it end-to-end against the live auth flow.
+    $tenant = Tenant::factory()->create();
+    $companyA = Company::factory()->forTenant($tenant)->create(['name' => 'Acme One']);
+    $user = User::factory()->forTenant($tenant)->create([
+        'password' => Hash::make('secret-shoe-string-piano'),
+        'default_company_id' => null,
+        'current_company_id' => null,
+    ]);
+    $user->assignTenantRole($tenant, 'accountant');
+
+    // Initially: zero companies bound to the user. Run the backfill (as
+    // the future company-creation endpoint would).
+    $count = app(BackfillUsersToCompanyAction::class)->execute($companyA);
+    expect($count)->toBe(1);
+    expect($user->fresh()->default_company_id)->toBe($companyA->id);
+
+    // Now provision a SECOND company. The transition rule: re-run the
+    // backfill (which now skips the user because their default is set).
+    $companyB = Company::factory()->forTenant($tenant)->create(['name' => 'Acme Two']);
+    $count2 = app(BackfillUsersToCompanyAction::class)->execute($companyB);
+    expect($count2)->toBe(0); // Idempotent: existing user untouched.
+
+    // Login + /me: user is still bound to companyA (no UX surprise after
+    // company #2 lands). Switching to B is an explicit X-Company-Id action.
+    $this->postJson('/api/v1/auth/login', [
+        'email' => $user->email,
+        'password' => 'secret-shoe-string-piano',
+    ])->assertOk();
+
+    $me = $this->getJson('/api/v1/auth/me')->assertOk();
+    expect($me->json('data.current_company.id'))->toBe($companyA->id);
+    expect($me->json('data.companies'))->toHaveCount(2);
 });

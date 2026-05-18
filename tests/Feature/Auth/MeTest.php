@@ -15,6 +15,7 @@ declare(strict_types=1);
 //     Laravel's throttle middleware is itself well-tested.
 // ─────────────────────────────────────────────────────────────────────────────
 
+use App\Models\Company;
 use App\Models\Tenant;
 use App\Models\User;
 use Database\Seeders\Framework\DefaultPermissionsSeeder;
@@ -37,9 +38,13 @@ beforeEach(function (): void {
     ]);
 });
 
-it('returns user + tenant + roles + permissions for an authenticated user in an active tenant', function (): void {
+it('returns user + tenant + current_company + companies + roles + permissions for a fully authenticated user', function (): void {
     $tenant = Tenant::factory()->create();
-    $user = User::factory()->forTenant($tenant)->create();
+    $company = Company::factory()->forTenant($tenant)->create();
+    $user = User::factory()->forTenant($tenant)->create([
+        'default_company_id' => $company->id,
+        'current_company_id' => $company->id,
+    ]);
     $user->assignTenantRole($tenant, 'accountant');
 
     $this->actingAs($user);
@@ -48,11 +53,10 @@ it('returns user + tenant + roles + permissions for an authenticated user in an 
 
     $response->assertOk();
     $response->assertJsonPath('data.user.id', $user->id);
-    $response->assertJsonPath('data.user.email', $user->email);
     $response->assertJsonPath('data.tenant.id', $tenant->id);
-    $response->assertJsonPath('data.tenant.functional_currency', $tenant->functional_currency);
-    $response->assertJsonPath('data.tenant.country_code', $tenant->country_code);
-    $response->assertJsonPath('data.tenant.timezone', $tenant->timezone);
+    $response->assertJsonPath('data.current_company.id', $company->id);
+    $response->assertJsonPath('data.current_company.functional_currency', $company->functional_currency);
+    $response->assertJsonPath('data.current_company.status', 'active');
     $response->assertExactJson([
         'data' => [
             'user' => [
@@ -69,6 +73,24 @@ it('returns user + tenant + roles + permissions for an authenticated user in an 
                 'default_currency' => $tenant->default_currency,
                 'functional_currency' => $tenant->functional_currency,
                 'timezone' => $tenant->timezone,
+            ],
+            'current_company' => [
+                'id' => $company->id,
+                'slug' => $company->slug,
+                'name' => $company->name,
+                'country_code' => $company->country_code,
+                'default_currency' => $company->default_currency,
+                'functional_currency' => $company->functional_currency,
+                'timezone' => $company->timezone,
+                'status' => 'active',
+            ],
+            'companies' => [
+                [
+                    'id' => $company->id,
+                    'slug' => $company->slug,
+                    'name' => $company->name,
+                    'status' => 'active',
+                ],
             ],
             'roles' => ['accountant'],
             'permissions' => [
@@ -122,8 +144,9 @@ it('isolates tenants — only the current tenant data is returned, no leakage of
     expect(json_encode($response->json()))->not->toContain('viewer');
 });
 
-it('the response payload contains exactly { data: { user, tenant, roles, permissions } } and excludes sensitive fields', function (): void {
+it('payload contains exactly { user, tenant, current_company, companies, roles, permissions } and excludes sensitive fields', function (): void {
     $tenant = Tenant::factory()->create();
+    Company::factory()->forTenant($tenant)->create();
     $user = User::factory()->forTenant($tenant)->create();
     $user->assignTenantRole($tenant, 'viewer');
 
@@ -132,15 +155,100 @@ it('the response payload contains exactly { data: { user, tenant, roles, permiss
     $body = $this->getJson('/api/v1/auth/me')->json();
 
     expect(array_keys($body))->toBe(['data']);
-    expect(array_keys($body['data']))->toEqualCanonicalizing(['user', 'tenant', 'roles', 'permissions']);
+    expect(array_keys($body['data']))->toEqualCanonicalizing(['user', 'tenant', 'current_company', 'companies', 'roles', 'permissions']);
     expect($body['data']['user'])->not->toHaveKey('password');
     expect($body['data']['user'])->not->toHaveKey('remember_token');
     expect($body['data']['user'])->not->toHaveKey('tenant_id');
     expect($body['data']['user'])->not->toHaveKey('current_tenant_id');
+    expect($body['data']['user'])->not->toHaveKey('default_company_id');
+    expect($body['data']['user'])->not->toHaveKey('current_company_id');
     expect($body['data']['tenant'])->not->toHaveKey('settings');
     expect($body['data']['tenant'])->not->toHaveKey('status');
     expect($body['data']['tenant'])->not->toHaveKey('legal_name');
     expect($body['data']['tenant'])->not->toHaveKey('deleted_at');
+    expect($body['data']['current_company'])->not->toHaveKey('settings');
+    expect($body['data']['current_company'])->not->toHaveKey('legal_name');
+    expect($body['data']['current_company'])->not->toHaveKey('deleted_at');
+});
+
+it('returns current_company: null gracefully when company:optional and no company resolves', function (): void {
+    // Multi-company tenant where the user has no chosen default → Step 4
+    // sole-fallback doesn't fire (count !== 1). Without `company:optional`
+    // on /me, this would return 401 company_required; with it, the SPA
+    // gets a graceful payload to render a picker.
+    $tenant = Tenant::factory()->create();
+    Company::factory()->forTenant($tenant)->create(['name' => 'A Co']);
+    Company::factory()->forTenant($tenant)->create(['name' => 'B Co']);
+    $user = User::factory()->forTenant($tenant)->create([
+        'default_company_id' => null,
+        'current_company_id' => null,
+    ]);
+    $user->assignTenantRole($tenant, 'viewer');
+
+    $this->actingAs($user);
+
+    $response = $this->getJson('/api/v1/auth/me')->assertOk();
+
+    expect($response->json('data.current_company'))->toBeNull();
+    expect($response->json('data.companies'))->toHaveCount(2);
+});
+
+it('lists all active companies in the tenant; archived ones are filtered out', function (): void {
+    $tenant = Tenant::factory()->create();
+    $active = Company::factory()->forTenant($tenant)->create(['name' => 'Active Co']);
+    Company::factory()->forTenant($tenant)->archived()->create(['name' => 'Archived Co']);
+    $user = User::factory()->forTenant($tenant)->create([
+        'default_company_id' => $active->id,
+        'current_company_id' => $active->id,
+    ]);
+
+    $this->actingAs($user);
+
+    $body = $this->getJson('/api/v1/auth/me')->assertOk()->json();
+
+    $names = array_column($body['data']['companies'], 'name');
+    expect($names)->toContain('Active Co');
+    expect($names)->not->toContain('Archived Co');
+});
+
+it('honors X-Company-Id header to switch the resolved company within a tenant', function (): void {
+    $tenant = Tenant::factory()->create();
+    $companyA = Company::factory()->forTenant($tenant)->create();
+    $companyB = Company::factory()->forTenant($tenant)->create();
+    $user = User::factory()->forTenant($tenant)->create([
+        'default_company_id' => $companyA->id,
+        'current_company_id' => $companyA->id,
+    ]);
+
+    $this->actingAs($user);
+
+    // Default: lands on companyA via current_company_id.
+    $a = $this->getJson('/api/v1/auth/me')->assertOk();
+    expect($a->json('data.current_company.id'))->toBe($companyA->id);
+
+    // With header: switches to companyB; current_company_id persisted.
+    $b = $this->withHeader('X-Company-Id', (string) $companyB->id)
+        ->getJson('/api/v1/auth/me')
+        ->assertOk();
+    expect($b->json('data.current_company.id'))->toBe($companyB->id);
+    expect($user->fresh()->current_company_id)->toBe($companyB->id);
+});
+
+it('returns 403 when X-Company-Id points at a company outside the user\'s tenant', function (): void {
+    $tenantA = Tenant::factory()->create();
+    $tenantB = Tenant::factory()->create();
+    $companyA = Company::factory()->forTenant($tenantA)->create();
+    $companyB = Company::factory()->forTenant($tenantB)->create();
+    $user = User::factory()->forTenant($tenantA)->create([
+        'default_company_id' => $companyA->id,
+        'current_company_id' => $companyA->id,
+    ]);
+
+    $this->actingAs($user);
+
+    $this->withHeader('X-Company-Id', (string) $companyB->id)
+        ->getJson('/api/v1/auth/me')
+        ->assertStatus(403);
 });
 
 it('reflects role grants scoped via Spatie teams — different role per tenant returns the current-tenant role only', function (): void {

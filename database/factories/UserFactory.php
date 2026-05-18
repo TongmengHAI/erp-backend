@@ -28,6 +28,8 @@ class UserFactory extends Factory
             'remember_token' => Str::random(10),
             'tenant_id' => Tenant::factory(),
             'current_tenant_id' => null,
+            'default_company_id' => null,
+            'current_company_id' => null,
         ];
     }
 

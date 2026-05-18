@@ -27,12 +27,25 @@ Route::middleware('auth:sanctum')->group(function (): void {
         ->name('auth.logout');
 });
 
-// --- Authenticated routes (tenant-scoped) ---
-// auth:sanctum populates $request->user(); ResolveTenant pins TenantContext
-// and Spatie's PermissionRegistrar team_id to the user's current tenant.
-// Future business endpoints (HRM, accounting, etc.) live in this group.
-Route::middleware(['auth:sanctum', 'tenant'])->group(function (): void {
+// --- /auth/me: tenant-scoped, company OPTIONAL ---
+// auth:sanctum populates $request->user(); ResolveTenant pins TenantContext;
+// ResolveCompany pins CompanyContext when resolvable, but `company:optional`
+// suppresses the throw on Step 5 so a user with no resolvable company
+// (e.g. a multi-company tenant whose user hasn't picked yet) still gets a
+// graceful payload with current_company: null + the companies array. The
+// SPA renders a picker UI instead of getting bounced.
+Route::middleware(['auth:sanctum', 'tenant', 'company:optional'])->group(function (): void {
     Route::get('/auth/me', MeController::class)
         ->middleware('throttle:60,1')
         ->name('auth.me');
+});
+
+// --- Authenticated routes (tenant + company REQUIRED) ---
+// Future business endpoints (HRM, accounting, etc.) land in this group.
+// The `company` middleware (no parameter) throws company_required when no
+// company resolves — these endpoints require a chosen company to run.
+//
+// Empty for now; H1b registers org-structure routes here.
+Route::middleware(['auth:sanctum', 'tenant', 'company'])->group(function (): void {
+    //
 });

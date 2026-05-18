@@ -2,7 +2,11 @@
 
 declare(strict_types=1);
 
+use App\Models\Company;
 use App\Support\Audit\Console\CreateAuditPartitionsCommand;
+use App\Support\Company\Enums\CompanyStatus;
+use App\Support\Company\Exceptions\CompanyContextMissingException;
+use App\Support\Company\Middleware\ResolveCompany;
 use App\Support\Tenancy\Exceptions\TenantInactiveException;
 use App\Support\Tenancy\Middleware\ResolveTenant;
 use Illuminate\Foundation\Application;
@@ -27,6 +31,11 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->statefulApi();
         $middleware->alias([
             'tenant' => ResolveTenant::class,
+            // ResolveCompany must run AFTER ResolveTenant — it depends on
+            // TenantContext being populated. Routes that need company
+            // context apply the middleware stack ['auth:sanctum', 'tenant',
+            // 'company']; opt out per-route via meta companyOptional=true.
+            'company' => ResolveCompany::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
@@ -40,6 +49,40 @@ return Application::configure(basePath: dirname(__DIR__))
             return response()->json([
                 'message' => $e->getMessage(),
                 'error_code' => $e->errorCode,
+            ], $e->getStatusCode());
+        });
+
+        // Render CompanyContextMissingException with error_code='company_required'
+        // plus an available_companies array so the SPA can render a picker.
+        // We compute available_companies lazily here (rather than in the
+        // exception itself) because the exception is also thrown from
+        // non-request contexts (CompanyScope, BelongsToCompany) where there
+        // is no current user.
+        $exceptions->render(function (CompanyContextMissingException $e, Request $request) {
+            if (! $request->expectsJson()) {
+                return null;
+            }
+
+            $available = [];
+            $user = $request->user();
+            if ($user !== null && $user->tenant_id !== null) {
+                $available = Company::query()
+                    ->where('tenant_id', $user->tenant_id)
+                    ->where('status', CompanyStatus::Active->value)
+                    ->get(['id', 'slug', 'name', 'status'])
+                    ->map(fn (Company $c): array => [
+                        'id' => $c->id,
+                        'slug' => $c->slug,
+                        'name' => $c->name,
+                        'status' => $c->status->value,
+                    ])
+                    ->all();
+            }
+
+            return response()->json([
+                'message' => $e->getMessage(),
+                'error_code' => $e->errorCode,
+                'available_companies' => $available,
             ], $e->getStatusCode());
         });
     })->create();

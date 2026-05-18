@@ -100,6 +100,20 @@ No request body. No query parameters.
       "functional_currency": "USD",
       "timezone": "Asia/Phnom_Penh"
     },
+    "current_company": {
+      "id": 3,
+      "slug": "acme-trading",
+      "name": "Acme Trading Co.",
+      "country_code": "KH",
+      "default_currency": "USD",
+      "functional_currency": "USD",
+      "timezone": "Asia/Phnom_Penh",
+      "status": "active"
+    },
+    "companies": [
+      { "id": 3, "slug": "acme-trading", "name": "Acme Trading Co.", "status": "active" },
+      { "id": 4, "slug": "acme-retail",  "name": "Acme Retail",      "status": "active" }
+    ],
     "roles": ["accountant"],
     "permissions": [
       "accounting.journal_entry.view",
@@ -120,8 +134,39 @@ No request body. No query parameters.
 | `data.tenant.default_currency` | string (ISO 4217) | Display currency the tenant prefers |
 | `data.tenant.functional_currency` | string (ISO 4217) | The tenant's books currency — used for the accounting engine. Always use this for monetary `Intl.NumberFormat`. |
 | `data.tenant.timezone` | IANA timezone string | Used for date formatting on the frontend |
-| `data.roles` | array of strings | Role names assigned to the user in the **current** tenant. Display-only. Frontend MUST NOT branch on role names — only on `permissions`. |
-| `data.permissions` | array of strings | Flat list of permission names the user effectively holds in the current tenant (direct grants ∪ permissions via assigned roles). Used by `useAuthStore().can('...')`. |
+| `data.current_company` | Company object \| null | The resolved company for this request, full shape. `null` when no company resolved — frontend renders a picker (see "Company context" section below). Fields mirror `data.tenant` plus `status`. |
+| `data.companies` | array of company-brief objects | Every active company in the user's tenant. Brief shape: `{ id, slug, name, status }`. Sufficient to render a switcher; full shape via the API only for `current_company`. Sorted by name. |
+| `data.roles` | array of strings | Role names assigned to the user in the **current** tenant. Display-only. Frontend MUST NOT branch on role names — only on `permissions`. Per-company role variance is intended (a user can be `accountant` in one company and `viewer` in another within the same tenant); the per-company permission split lands in a future slice. For now, `permissions` is tenant-aggregated. |
+| `data.permissions` | array of strings | Flat list of permission names the user effectively holds in the current tenant (direct grants ∪ permissions via assigned roles). Used by `useAuthStore().can('...')`. Currently tenant-scoped; will gain a company dimension in a future slice. |
+
+## Company context
+
+The SPA selects a company via the `X-Company-Id` request header on every authenticated request. The header carries the company's numeric ID (`X-Company-Id: 7`). The server resolves company context through a 5-branch chain:
+
+1. **`X-Company-Id` header** — explicit selection. On success, server persists the choice as `user.current_company_id`. On invalid ID (no such company, wrong tenant, archived): **403** with `"Company access denied."`.
+2. **`user.current_company_id`** — last-used company; survives sessions.
+3. **`user.default_company_id`** — preferred home; promoted to current on hit.
+4. **Sole-company fallback** — if the tenant has exactly one active company, pin it. Single-company tenants work without any per-user config; default and current are backfilled on first access.
+5. **None matched** — route decides:
+   - Routes marked `company:optional` (currently only `/auth/me`) proceed with `current_company: null` so the SPA can render a picker.
+   - All other authenticated routes return **401** with `error_code: 'company_required'` + `available_companies` array (brief-shape companies in the user's tenant).
+
+Transition from single-company to multi-company: when a tenant provisions a second company, the server atomically backfills every existing user's `default_company_id` and `current_company_id` to the previously-sole company. Existing user sessions continue without interruption; switching to the new company is an explicit `X-Company-Id` action. (See CLAUDE.md §3 "Multi-company within a tenant" for the architectural rule.)
+
+## Error response shape for `company_required`
+
+```json
+{
+  "message": "No company context resolved.",
+  "error_code": "company_required",
+  "available_companies": [
+    { "id": 3, "slug": "acme-trading", "name": "Acme Trading Co.", "status": "active" },
+    { "id": 4, "slug": "acme-retail",  "name": "Acme Retail",      "status": "active" }
+  ]
+}
+```
+
+Returned on **401**. The SPA should route to a company-picker UI, prompt the user to choose, then re-issue the original request with `X-Company-Id: <chosen-id>`. Distinguished from `tenant_inactive` (different `error_code`) and from a plain 401 (which means the session is gone — route to `/login`).
 
 **Errors**
 
