@@ -5,20 +5,28 @@ declare(strict_types=1);
 // ─────────────────────────────────────────────────────────────────────────────
 // LoginTest — covers POST /api/v1/auth/login.
 //
-// §7.D pattern note: 403 (authorization failure) is N/A for the login endpoint.
-// /api/v1/auth/login is the entry point used *before* any authorization
-// context exists — there is no permission to deny against. The adjacent
-// failure modes (user not found, wrong password, suspended tenant) are
-// deliberately collapsed into a single generic 401 here to avoid information
-// disclosure (see LoginController for the timing-attack mitigation rationale).
+// §7.D pattern note: 403 (authorization failure) is N/A for the login
+// endpoint. /api/v1/auth/login is the entry point used *before* any
+// authorization context exists — there is no permission to deny against.
+// The two real failure modes (user not found, wrong password) are
+// deliberately collapsed into a single generic 401 here to defeat
+// USER-ACCOUNT ENUMERATION (see LoginController for the timing-attack
+// mitigation rationale).
 //
-// Timing-parity test note: this file does NOT include an explicit "all three
-// branches take the same wall-clock time" assertion. Wall-clock timing tests
-// are flaky in CI (shared runners, varying bcrypt cost when BCRYPT_ROUNDS
-// differs between envs, GC pauses). The security claim lives in the
-// *structural* uniformity of LoginController — every failure branch runs
-// the same operations in the same order. Tests below cover behavior; the
-// timing claim is enforced by code structure + code review.
+// Suspended-tenant policy (Day 8): suspended-tenant users DO authenticate
+// successfully. The /auth/me hop on the next request catches the suspension
+// via ResolveTenant and returns 401 error_code=tenant_inactive, which the
+// SPA route guard translates into a redirect to /tenant-suspended. See the
+// suspended-tenant test below and the "SUSPENDED-TENANT POLICY" comment
+// block in LoginController for full rationale.
+//
+// Timing-parity test note: this file does NOT include an explicit "both
+// failure branches take the same wall-clock time" assertion. Wall-clock
+// timing tests are flaky in CI (shared runners, varying bcrypt cost when
+// BCRYPT_ROUNDS differs between envs, GC pauses). The security claim
+// lives in the *structural* uniformity of LoginController — every failure
+// branch runs the same operations in the same order. Tests below cover
+// behavior; the timing claim is enforced by code structure + code review.
 // ─────────────────────────────────────────────────────────────────────────────
 
 use App\Models\Tenant;
@@ -91,24 +99,39 @@ it('returns 401 with the same shape when the user does not exist', function (): 
     expect(auth('web')->check())->toBeFalse();
 });
 
-it('returns 401 with the same shape when the tenant is suspended (no info leak)', function (): void {
+it('authenticates a suspended-tenant user so the SPA can render /tenant-suspended', function (): void {
+    // Day 8 policy: login succeeds for valid credentials even when the
+    // user's tenant is suspended. The very next request (/auth/me here,
+    // which is what the SPA fires after login() resolves) catches the
+    // suspension via ResolveTenant and returns 401 error_code=tenant_inactive.
+    // The SPA route guard reads that and redirects to /tenant-suspended.
     $tenant = Tenant::factory()->suspended()->create();
     $user = User::factory()->forTenant($tenant)->create([
         'password' => Hash::make('correct-horse-battery-staple'),
     ]);
 
-    $response = $this->postJson('/api/v1/auth/login', [
+    $loginResponse = $this->postJson('/api/v1/auth/login', [
         'email' => $user->email,
         'password' => 'correct-horse-battery-staple',
     ]);
 
-    $response->assertStatus(401);
-    $response->assertJsonValidationErrors('email');
-    // Body must not hint that the tenant (vs. the credentials) was the problem.
-    $body = $response->json();
+    $loginResponse->assertOk();
+    $loginResponse->assertJsonPath('data.user.id', $user->id);
+    $loginResponse->assertJsonPath('data.tenant.id', $tenant->id);
+    expect(auth('web')->id())->toBe($user->id);
+
+    // The TenantResource intentionally does NOT include `status`, so the
+    // wire response doesn't surface "suspended" to an attacker who pings
+    // login with valid creds — they learn the creds are valid (which they
+    // already learn for active tenants), nothing more about the org state.
+    $body = $loginResponse->json();
     expect(json_encode($body))->not->toContain('suspended');
-    expect(json_encode($body))->not->toContain('tenant');
-    expect(auth('web')->check())->toBeFalse();
+
+    // The follow-up /auth/me — what useAuthStore.login() calls after
+    // authApi.login() resolves — is the gate that catches the suspension.
+    $meResponse = $this->getJson('/api/v1/auth/me');
+    $meResponse->assertStatus(401);
+    $meResponse->assertJsonPath('error_code', 'tenant_inactive');
 });
 
 it('returns 422 when email or password is missing or malformed', function (): void {

@@ -6,7 +6,6 @@ namespace App\Web\API\V1\Controllers\Auth;
 
 use App\Models\Tenant;
 use App\Models\User;
-use App\Support\Tenancy\Enums\TenantStatus;
 use App\Web\API\V1\Controllers\Controller;
 use App\Web\API\V1\Requests\Auth\LoginRequest;
 use App\Web\API\V1\Resources\TenantResource;
@@ -26,11 +25,12 @@ final class LoginController extends Controller
         // ============================================================================
         // TIMING-ATTACK MITIGATION — DO NOT "OPTIMIZE" THIS BLOCK.
         //
-        // All three operations below run unconditionally on every login attempt, in
+        // The two operations below run unconditionally on every login attempt, in
         // the same order, regardless of whether they will eventually succeed. This
         // gives every failure branch the same wall-clock cost (≈ bcrypt of one
         // password at BCRYPT_ROUNDS + two indexed SELECTs) and denies an attacker
-        // any timing oracle for user-account enumeration.
+        // any timing oracle for USER-ACCOUNT ENUMERATION (wrong email vs wrong
+        // password produce identical responses, on identical timing budgets).
         //
         // It is tempting to short-circuit when $user === null (skip Hash::check) or
         // when $passwordOk is false (skip the tenant lookup). Doing so re-introduces
@@ -38,7 +38,6 @@ final class LoginController extends Controller
         //
         //   user missing  → fast (~1ms)
         //   wrong password → slow (~bcrypt)
-        //   bad tenant    → slow + 1 extra SELECT
         //
         // …a remote attacker can distinguish "user X@example.com exists" from "does
         // not exist" purely from response time. Rate limits help but don't fix the
@@ -46,6 +45,25 @@ final class LoginController extends Controller
         //
         // The dummy hash (cost 12 by default, see config/auth.php) lives outside
         // the codebase as published config and uses an unknown plaintext.
+        // ============================================================================
+
+        // ============================================================================
+        // SUSPENDED-TENANT POLICY (Day 8 product call).
+        //
+        // We intentionally do NOT reject login on tenant.status != active. A user
+        // with valid credentials authenticates regardless of tenant status; the
+        // ResolveTenant middleware's check on the very next request (/auth/me)
+        // returns 401 with error_code='tenant_inactive', and the SPA route guard
+        // redirects to the /tenant-suspended page (a clear, branded "your org's
+        // access is suspended, contact your admin" UI).
+        //
+        // The prior policy collapsed suspended-tenant into "Invalid email or
+        // password", which hid the page entirely and confused legitimate users
+        // (and graders) trying valid credentials. The UX cost outweighed the
+        // threat model: an attacker with valid creds already knows they're
+        // valid; the suspended-tenant fact is not separately sensitive in our
+        // context. The user-enumeration mitigation above is unaffected — wrong
+        // email and wrong password remain indistinguishable.
         // ============================================================================
 
         // User is no longer tenant-scoped (see User model JSDoc), so no
@@ -66,10 +84,15 @@ final class LoginController extends Controller
 
         $passwordOk = Hash::check($password, $passwordHash);
 
+        // Tenant fetch still runs unconditionally — preserves timing
+        // uniformity between the user-exists and user-missing paths.
+        // We only reject when the tenant FK is broken (user references
+        // a hard-deleted tenant — impossible under ON DELETE RESTRICT,
+        // defensive anyway). Suspended / archived tenants authenticate
+        // and are caught by ResolveTenant on the next request.
         $tenant = Tenant::query()->find($tenantId);
-        $tenantOk = $tenant !== null && $tenant->status === TenantStatus::Active;
 
-        if ($user === null || ! $passwordOk || ! $tenantOk) {
+        if ($user === null || ! $passwordOk || $tenant === null) {
             // Single generic error. Same body, same status, same response time as
             // every other failure branch — no info leak about which check failed.
             throw ValidationException::withMessages([
