@@ -22,6 +22,7 @@ use LogicException;
  *
  * @property int $id
  * @property int|null $tenant_id
+ * @property int|null $company_id
  * @property string $auditable_type
  * @property int $auditable_id
  * @property string $action

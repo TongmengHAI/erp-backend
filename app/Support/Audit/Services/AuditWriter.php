@@ -28,6 +28,12 @@ use Throwable;
  *   request_id → AuditContext (stable per request, used for correlation)
  *   tenant_id  → $model->getAttribute('tenant_id') first, then
  *                TenantContext::current()?->id, finally null.
+ *   company_id → $model->getAttribute('company_id') only — does NOT fall back
+ *                to CompanyContext. Tenant-only models (Tenant, Company itself,
+ *                User identity rows) genuinely have no company dimension, so
+ *                their audit rows must record NULL even when a company context
+ *                happens to be set on the request. The model attribute is the
+ *                authoritative answer.
  *
  * Bypasses Eloquent for the INSERT to avoid recursive `created` events on
  * AuditLog and to stay inside the caller's open transaction without ceremony.
@@ -53,8 +59,18 @@ final class AuditWriter
         $modelTenantId = $model->getAttribute('tenant_id');
         $tenantId = $modelTenantId ?? app(TenantContext::class)->current()?->id;
 
+        // company_id reads off the model only — no CompanyContext fallback.
+        // Tenant-only models (e.g. User, Tenant, Company) don't carry a
+        // company_id attribute; getAttribute() returns null and we record
+        // null. Company-scoped models (via BelongsToCompany) auto-fill
+        // company_id at boot so the attribute is always set by the time
+        // the audit write fires.
+        /** @var int|null $companyId */
+        $companyId = $model->getAttribute('company_id');
+
         $row = [
             'tenant_id' => $tenantId,
+            'company_id' => $companyId,
             'auditable_type' => $model::class,
             'auditable_id' => $model->getKey(),
             'action' => $action,
