@@ -31,6 +31,10 @@ Every endpoint is gated by a Spatie permission (the `{domain}.{resource}.{action
 | `hrm.employee.create` | `tenant_admin` |
 | `hrm.employee.update` | `tenant_admin` |
 | `hrm.employee.delete` | `tenant_admin` |
+| `hrm.department.view` | `tenant_admin`, `viewer` |
+| `hrm.department.create` | `tenant_admin` |
+| `hrm.department.update` | `tenant_admin` |
+| `hrm.department.delete` | `tenant_admin` |
 
 ### Standard error responses
 
@@ -198,6 +202,129 @@ Soft-delete an employee. The row remains in the DB with `deleted_at` set; it dis
 
 ---
 
+## Departments
+
+Flat organizational units within a company. No hierarchy in this slice — `parent_id`, closure tables, and an Employee↔Department FK link are explicitly deferred. Each department is a standalone record scoped to one `(tenant, company)` pair.
+
+### Resource shape
+
+The full Department shape returned by `show`, `store`, and `update`:
+
+```json
+{
+    "data": {
+        "id": 7,
+        "code": "D-OPS",
+        "name": "Operations",
+        "description": "Day-to-day operations team.",
+        "status": "active",
+        "created_at": "2026-05-20T10:00:00+00:00",
+        "updated_at": "2026-05-20T10:00:00+00:00"
+    }
+}
+```
+
+The list (`index`) response uses a compact shape — no `description`, no `created_at`/`updated_at`:
+
+```json
+{
+    "data": [
+        { "id": 7, "code": "D-OPS", "name": "Operations", "status": "active" }
+    ],
+    "links": { "first": "...", "last": "...", "prev": null, "next": "..." },
+    "meta": { "current_page": 1, "from": 1, "to": 25, "per_page": 25, "total": 4, "last_page": 1 }
+}
+```
+
+`tenant_id` and `company_id` are deliberately omitted — same convention as the Employees resource.
+
+### Field semantics
+
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `code` | string ≤ 32 chars | yes | Unique within `(tenant, company)`. Free-form (e.g. `D-OPS`, `FIN`, `ACME-SALES`). |
+| `name` | string ≤ 255 | yes | Display name. |
+| `description` | string ≤ 500 or `null` | no | Short descriptor — bounded, not a notes blob. Cap enforced in 3 places: DB column, FormRequest, frontend Zod schema. |
+| `status` | enum | yes | One of `active`, `archived`. |
+
+### `DepartmentStatus` enum values
+
+| Value | Meaning |
+| --- | --- |
+| `active` | Operational; appears in default lists. |
+| `archived` | Retired; preserved for historical reference. Filtered out via the status filter, not deleted. |
+
+### Endpoint: GET /api/v1/hrm/departments
+
+**Permission**: `hrm.department.view`
+
+List departments in the current `(tenant, company)`. Paginated.
+
+**Query parameters:**
+
+| Param | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `search` | string ≤ 255 | no | Case-insensitive partial match against `name` OR `code` (PostgreSQL ILIKE). |
+| `status` | enum | no | One of `active`, `archived`. |
+| `per_page` | int 1–100 | no | Default 25. |
+| `page` | int ≥ 1 | no | Default 1. Standard Laravel pagination. |
+
+**Returns**: list shape (above). Empty `data: []` is the correct empty state; the API does not return 404 for "no results".
+
+### Endpoint: GET /api/v1/hrm/departments/{department}
+
+**Permission**: `hrm.department.view`
+
+Fetch a single department. `{department}` is the integer id.
+
+**Returns**: full shape (above). **404** if the id doesn't exist, has been soft-deleted, or belongs to a different tenant/company.
+
+### Endpoint: POST /api/v1/hrm/departments
+
+**Permission**: `hrm.department.create`
+
+Create a new department. `tenant_id` and `company_id` are derived from the request context — they MUST NOT appear in the request body.
+
+**Request body** example:
+
+```json
+{
+    "code": "D-MKTG",
+    "name": "Marketing",
+    "description": "Marketing and brand team.",
+    "status": "active"
+}
+```
+
+**Returns**: **201 Created** with full Department shape.
+
+**Validation errors (422):**
+- `code` already in use within the current `(tenant, company)`.
+- `code` exceeds 32 chars or is empty.
+- `name` exceeds 255 chars or is empty.
+- `description` exceeds 500 chars.
+- `status` is not in the enum.
+
+### Endpoint: PATCH /api/v1/hrm/departments/{department}
+
+**Permission**: `hrm.department.update`
+
+Partial update. Only fields present in the body are touched (`sometimes` rule). All field-level constraints from `store` apply, including the ignore-self uniqueness check on `code`.
+
+### Endpoint: DELETE /api/v1/hrm/departments/{department}
+
+**Permission**: `hrm.department.delete`
+
+Soft-delete a department. The row remains in the DB with `deleted_at` set; it disappears from list/show responses immediately.
+
+**Returns**: **204 No Content**.
+
+**Idempotency**: a second `DELETE` on the same id returns **404**.
+
+**Status preservation**: deleting does NOT auto-set `status='archived'`. If you want both, update the status first, then delete.
+
+---
+
 ## Audit
 
 Every create / update / delete writes an entry to `audit_logs` with:
@@ -212,12 +339,13 @@ Audit rows are append-only at the DB level (immutability trigger). No HRM endpoi
 
 ---
 
-## Out of scope for this slice (graded-assignment deferred)
+## Out of scope (deferred)
 
-The following are **not** in the Employees module as shipped:
+The following are **not** in the HRM module as shipped:
 
-- Departments / branches / positions tables (Employee.job_title is plain text)
-- Hierarchy / closure tables, manager relationships
+- **Employee↔Department FK link** — Departments ships standalone in this slice; the FK is a planned follow-up. Employee.job_title remains plain text until the link lands.
+- Branches table, Positions table
+- Hierarchy / closure tables, department parents, manager relationships
 - Photo upload, address history, emergency contacts, salary
 - Bulk select / bulk delete
 - Audit-log read endpoint

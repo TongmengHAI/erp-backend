@@ -76,6 +76,10 @@ final class DefaultPermissionsSeeder extends Seeder
             'hrm.employee.create',
             'hrm.employee.update',
             'hrm.employee.delete',
+            'hrm.department.view',
+            'hrm.department.create',
+            'hrm.department.update',
+            'hrm.department.delete',
         ];
     }
 }

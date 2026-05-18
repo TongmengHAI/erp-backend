@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Database\Seeders\Demo;
 
+use App\Domain\HRM\Enums\DepartmentStatus;
 use App\Domain\HRM\Enums\EmployeeStatus;
+use App\Domain\HRM\Models\Department;
 use App\Domain\HRM\Models\Employee;
 use App\Models\Company;
 use App\Models\Tenant;
@@ -27,9 +29,10 @@ use Illuminate\Support\Facades\Hash;
  *
  *   Tenant: Acme Trading Co. (active)
  *     └── Company: Acme Trading Co. (active)
- *           └── admin@acme.test / password — tenant_admin role
- *               (tenant.settings.manage, accounting.journal_entry.view,
- *                accounting.journal_entry.create)
+ *           ├── admin@acme.test / password — tenant_admin role
+ *           ├── 6 employees (mix of statuses: active / on_leave / terminated)
+ *           └── 4 departments (3 active: Operations, Finance, Sales;
+ *                              1 archived: Warehouse)
  *
  *   Tenant: Suspended Co. (status=suspended)
  *     └── Company: Suspended Co. (active — the suspension is the tenant's)
@@ -156,6 +159,28 @@ final class DemoUsersSeeder extends Seeder
                     'email' => $row['email'],
                     'job_title' => $row['title'],
                     'hire_date' => $row['hire'],
+                    'status' => $row['status'],
+                ],
+            );
+        }
+
+        // ─── Demo departments in Acme Trading Co. ─────────────────────────────
+        // Four departments — three active, one archived — so the list page's
+        // StatusBadge + status filter both have something to render. CompanyContext
+        // is still set from the employee seed above (required by BelongsToCompany).
+        $demoDepartments = [
+            ['code' => 'D-OPS',   'name' => 'Operations', 'description' => 'Day-to-day operations team.',         'status' => DepartmentStatus::Active],
+            ['code' => 'D-FIN',   'name' => 'Finance',    'description' => 'Finance and accounting team.',        'status' => DepartmentStatus::Active],
+            ['code' => 'D-SALES', 'name' => 'Sales',      'description' => 'Sales and customer success.',         'status' => DepartmentStatus::Active],
+            ['code' => 'D-WHSE',  'name' => 'Warehouse',  'description' => 'Historical warehouse team (retired).', 'status' => DepartmentStatus::Archived],
+        ];
+
+        foreach ($demoDepartments as $row) {
+            Department::query()->firstOrCreate(
+                ['tenant_id' => $acmeTenant->id, 'company_id' => $acmeCompany->id, 'code' => $row['code']],
+                [
+                    'name' => $row['name'],
+                    'description' => $row['description'],
                     'status' => $row['status'],
                 ],
             );

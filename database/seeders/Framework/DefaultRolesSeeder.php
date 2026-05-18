@@ -61,6 +61,10 @@ final class DefaultRolesSeeder extends Seeder
                 'hrm.employee.create',
                 'hrm.employee.update',
                 'hrm.employee.delete',
+                'hrm.department.view',
+                'hrm.department.create',
+                'hrm.department.update',
+                'hrm.department.delete',
             ],
             'accountant' => [
                 'accounting.journal_entry.view',
@@ -69,6 +73,7 @@ final class DefaultRolesSeeder extends Seeder
             'viewer' => [
                 'accounting.journal_entry.view',
                 'hrm.employee.view',
+                'hrm.department.view',
             ],
         ];
     }

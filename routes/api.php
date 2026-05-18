@@ -5,6 +5,7 @@ declare(strict_types=1);
 use App\Web\API\V1\Controllers\Auth\LoginController;
 use App\Web\API\V1\Controllers\Auth\LogoutController;
 use App\Web\API\V1\Controllers\Auth\MeController;
+use App\Web\API\V1\Controllers\HRM\DepartmentController;
 use App\Web\API\V1\Controllers\HRM\EmployeeController;
 use Illuminate\Support\Facades\Route;
 
@@ -49,5 +50,7 @@ Route::middleware(['auth:sanctum', 'tenant', 'company'])->group(function (): voi
     Route::prefix('hrm')->group(function (): void {
         Route::apiResource('employees', EmployeeController::class)
             ->parameters(['employees' => 'employee']);
+        Route::apiResource('departments', DepartmentController::class)
+            ->parameters(['departments' => 'department']);
     });
 });
