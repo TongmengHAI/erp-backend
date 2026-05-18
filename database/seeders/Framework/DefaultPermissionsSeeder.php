@@ -70,6 +70,12 @@ final class DefaultPermissionsSeeder extends Seeder
             // accounting.*
             'accounting.journal_entry.view',
             'accounting.journal_entry.create',
+
+            // hrm.*
+            'hrm.employee.view',
+            'hrm.employee.create',
+            'hrm.employee.update',
+            'hrm.employee.delete',
         ];
     }
 }

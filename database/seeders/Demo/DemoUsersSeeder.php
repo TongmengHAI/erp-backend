@@ -4,10 +4,13 @@ declare(strict_types=1);
 
 namespace Database\Seeders\Demo;
 
+use App\Domain\HRM\Enums\EmployeeStatus;
+use App\Domain\HRM\Models\Employee;
 use App\Models\Company;
 use App\Models\Tenant;
 use App\Models\User;
 use App\Support\Company\Actions\BackfillUsersToCompanyAction;
+use App\Support\Company\CompanyContext;
 use App\Support\Company\Enums\CompanyStatus;
 use App\Support\Tenancy\Enums\TenantStatus;
 use App\Support\Tenancy\TenantContext;
@@ -128,6 +131,39 @@ final class DemoUsersSeeder extends Seeder
         // Idempotent role assignment scoped to the Acme tenant. HasTenantRoles
         // sets Spatie's team_id for the call and restores it on exit.
         $admin->assignTenantRole($acmeTenant, 'tenant_admin');
+
+        // ─── Demo employees in Acme Trading Co. ───────────────────────────────
+        // Six employees with deterministic codes so re-runs don't duplicate.
+        // Mix of statuses so the list page exercises StatusBadge + filter UI.
+        // CompanyContext is set for the duration of the inserts because
+        // Employee uses BelongsToCompany and would otherwise throw without it.
+        app(CompanyContext::class)->setCurrent($acmeCompany);
+
+        $demoEmployees = [
+            ['code' => 'E-1001', 'name' => 'Sokha Chan',    'email' => 'sokha.chan@acme.test',  'title' => 'Operations Manager', 'hire' => '2022-03-15', 'status' => EmployeeStatus::Active],
+            ['code' => 'E-1002', 'name' => 'Rithy Pich',    'email' => 'rithy.pich@acme.test',  'title' => 'Senior Accountant',  'hire' => '2021-09-01', 'status' => EmployeeStatus::Active],
+            ['code' => 'E-1003', 'name' => 'Bopha Nuon',    'email' => 'bopha.nuon@acme.test',  'title' => 'Sales Lead',         'hire' => '2023-01-10', 'status' => EmployeeStatus::Active],
+            ['code' => 'E-1004', 'name' => 'Vichea Sok',    'email' => null,                     'title' => 'Warehouse Clerk',    'hire' => '2024-06-20', 'status' => EmployeeStatus::OnLeave],
+            ['code' => 'E-1005', 'name' => 'Channary Lim',  'email' => 'channary.lim@acme.test', 'title' => 'HR Coordinator',     'hire' => '2022-11-08', 'status' => EmployeeStatus::Active],
+            ['code' => 'E-1006', 'name' => 'Dara Heng',     'email' => 'dara.heng@acme.test',    'title' => 'Junior Accountant',  'hire' => '2020-04-05', 'status' => EmployeeStatus::Terminated],
+        ];
+
+        foreach ($demoEmployees as $row) {
+            Employee::query()->firstOrCreate(
+                ['tenant_id' => $acmeTenant->id, 'company_id' => $acmeCompany->id, 'employee_code' => $row['code']],
+                [
+                    'full_name' => $row['name'],
+                    'email' => $row['email'],
+                    'job_title' => $row['title'],
+                    'hire_date' => $row['hire'],
+                    'status' => $row['status'],
+                ],
+            );
+        }
+
+        // Clear CompanyContext before moving on to the suspended-tenant block,
+        // which has its own company context concerns handled inside asSystem.
+        app(CompanyContext::class)->setCurrent(null);
 
         // ─── Suspended Co. tenant + company + suspended user ─────────────────
         $suspendedTenant = Tenant::query()->firstOrCreate(

@@ -6,4 +6,4 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
 uses(TestCase::class)->in('Feature', 'Integration');
-uses(TestCase::class, RefreshDatabase::class)->in('Unit/Support');
+uses(TestCase::class, RefreshDatabase::class)->in('Unit/Support', 'Unit/Domain');

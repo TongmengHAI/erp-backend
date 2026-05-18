@@ -5,6 +5,7 @@ declare(strict_types=1);
 use App\Web\API\V1\Controllers\Auth\LoginController;
 use App\Web\API\V1\Controllers\Auth\LogoutController;
 use App\Web\API\V1\Controllers\Auth\MeController;
+use App\Web\API\V1\Controllers\HRM\EmployeeController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/health', fn () => [
@@ -41,11 +42,12 @@ Route::middleware(['auth:sanctum', 'tenant', 'company:optional'])->group(functio
 });
 
 // --- Authenticated routes (tenant + company REQUIRED) ---
-// Future business endpoints (HRM, accounting, etc.) land in this group.
-// The `company` middleware (no parameter) throws company_required when no
+// Business endpoints (HRM, accounting, etc.) land in this group. The
+// `company` middleware (no parameter) throws company_required when no
 // company resolves — these endpoints require a chosen company to run.
-//
-// Empty for now; H1b registers org-structure routes here.
 Route::middleware(['auth:sanctum', 'tenant', 'company'])->group(function (): void {
-    //
+    Route::prefix('hrm')->group(function (): void {
+        Route::apiResource('employees', EmployeeController::class)
+            ->parameters(['employees' => 'employee']);
+    });
 });

@@ -57,6 +57,10 @@ final class DefaultRolesSeeder extends Seeder
                 'tenant.settings.manage',
                 'accounting.journal_entry.view',
                 'accounting.journal_entry.create',
+                'hrm.employee.view',
+                'hrm.employee.create',
+                'hrm.employee.update',
+                'hrm.employee.delete',
             ],
             'accountant' => [
                 'accounting.journal_entry.view',
@@ -64,6 +68,7 @@ final class DefaultRolesSeeder extends Seeder
             ],
             'viewer' => [
                 'accounting.journal_entry.view',
+                'hrm.employee.view',
             ],
         ];
     }

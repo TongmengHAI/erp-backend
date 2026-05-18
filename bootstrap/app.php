@@ -9,10 +9,20 @@ use App\Support\Company\Exceptions\CompanyContextMissingException;
 use App\Support\Company\Middleware\ResolveCompany;
 use App\Support\Tenancy\Exceptions\TenantInactiveException;
 use App\Support\Tenancy\Middleware\ResolveTenant;
+use Illuminate\Auth\Middleware\Authenticate;
+use Illuminate\Auth\Middleware\Authorize;
+use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
+use Illuminate\Cookie\Middleware\EncryptCookies;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
+use Illuminate\Foundation\Http\Middleware\HandlePrecognitiveRequests;
+use Illuminate\Foundation\Http\Middleware\VerifyCsrfToken;
 use Illuminate\Http\Request;
+use Illuminate\Routing\Middleware\SubstituteBindings;
+use Illuminate\Session\Middleware\StartSession;
+use Illuminate\View\Middleware\ShareErrorsFromSession;
+use Laravel\Sanctum\Http\Middleware\AuthenticateSession;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -36,6 +46,29 @@ return Application::configure(basePath: dirname(__DIR__))
             // context apply the middleware stack ['auth:sanctum', 'tenant',
             // 'company']; opt out per-route via meta companyOptional=true.
             'company' => ResolveCompany::class,
+        ]);
+
+        // Force SubstituteBindings (route-model binding) to run AFTER our
+        // auth/tenant/company context middleware. Without this, implicit
+        // model binding on tenant+company-scoped routes (e.g.
+        // /api/v1/hrm/employees/{employee}) tries to query Employee before
+        // TenantContext/CompanyContext are set, tripping the global scopes.
+        // Default Laravel priority puts SubstituteBindings late in the chain
+        // already, but Laravel 12's statefulApi() reorders things — being
+        // explicit here is the safe fix.
+        $middleware->priority([
+            HandlePrecognitiveRequests::class,
+            EncryptCookies::class,
+            AddQueuedCookiesToResponse::class,
+            StartSession::class,
+            ShareErrorsFromSession::class,
+            VerifyCsrfToken::class,
+            AuthenticateSession::class,
+            Authenticate::class,
+            ResolveTenant::class,
+            ResolveCompany::class,
+            SubstituteBindings::class,
+            Authorize::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

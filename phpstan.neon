@@ -28,15 +28,8 @@ parameters:
             paths:
                 - app/Providers/HorizonServiceProvider.php
                 - app/Providers/TelescopeServiceProvider.php
-        # BelongsToCompany is exercised only by tests/Fixtures/CompanyTestWidget
-        # (out of PHPStan scope per `paths` above). H1b's first tenant+company-
-        # scoped domain model (branches, departments, etc.) will put the
-        # trait into production use and this ignore can be dropped then.
-        # Same arc the BelongsToTenant ignore went through — that one is now
-        # gone because Company uses BelongsToTenant in production.
+        # BelongsToCompany ignore dropped: Employee (HRM, in app/) now uses
+        # the trait in production, so PHPStan sees a real consumer.
         # See CLAUDE.md §3 for why Company/User/Tenant don't use BelongsToCompany.
-        -
-            identifier: trait.unused
-            path: app/Support/Company/Concerns/BelongsToCompany.php
 # Tests are excluded from level-8 analysis until Pest + PHPStan integration is wired up
 # (Pest's $this polymorphism breaks static method resolution). Revisit in Step 1.
