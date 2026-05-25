@@ -35,6 +35,13 @@ Every endpoint is gated by a Spatie permission (the `{domain}.{resource}.{action
 | `hrm.department.create` | `tenant_admin` |
 | `hrm.department.update` | `tenant_admin` |
 | `hrm.department.delete` | `tenant_admin` |
+| `hrm.leave_request.view` | `tenant_admin`, `viewer` |
+| `hrm.leave_request.create` | `tenant_admin` |
+| `hrm.leave_request.update` | `tenant_admin` |
+| `hrm.leave_request.delete` | `tenant_admin` |
+| `hrm.leave_request.approve` | `tenant_admin` |
+
+`hrm.leave_request.approve` represents **decision-making authority** — it gates both the `/approve` and `/reject` endpoints. A manager who can decide on requests has decision authority, not "approval-only authority." This means a future "team_lead" role can be granted `.view + .approve` (decide on requests, no CRUD), and a future "employee" role can be granted `.view + .create + .update + .delete` (manage their own requests, no decisions) — without needing to split the permission later in a way that breaks existing role assignments.
 
 ### Standard error responses
 
@@ -44,6 +51,7 @@ Every endpoint is gated by a Spatie permission (the `{domain}.{resource}.{action
 | **403** | Authorization denied (missing permission, or `X-Company-Id` outside tenant) | `{message}` |
 | **404** | Resource not found (or hidden by tenant/company scope) | `{message}` |
 | **422** | Validation failure | `{message, errors: {field: [messages...]}}` |
+| **422** | Invalid state transition (Leave Requests only) | `{message, error_code: "invalid_transition", from, to}` |
 | **429** | Rate limit hit (60 req/min per route) | `{message}` |
 
 ### Rate limits
@@ -340,6 +348,227 @@ Soft-delete a department. The row remains in the DB with `deleted_at` set; it di
 
 ---
 
+## Leave Requests
+
+A leave request is an employee's request for time off. Unlike Employees and Departments — which are pure CRUD resources — a leave request carries a **workflow state**: it starts as `pending` and transitions exactly once into a terminal state (`approved` or `rejected`). The transition is performed by a user with decision-making authority.
+
+### State machine
+
+```
+                ┌──────────────────► approved (terminal)
+                │
+   pending ─────┤
+                │
+                └──────────────────► rejected (terminal)
+```
+
+- New requests always land in `pending`. The `status` field is **not** validated at the create endpoint — even if a client submits `status="approved"`, the value is dropped and the row is created as pending.
+- From `pending`, the row may transition to `approved` via `POST /approve`, or to `rejected` via `POST /reject`. Both are gated by the `hrm.leave_request.approve` permission.
+- Terminal states are **read-only at the edit layer**. `PATCH` on an `approved` or `rejected` row returns **422** with `error_code="invalid_transition"`. The Delete affordance still works (the row may have been created in error) — see the deliberate edit/delete asymmetry below.
+- There is no "re-open" transition. A wrongly-decided request is deleted and re-submitted; or — for accounting-grade rigor — handled by a future audit-trail-preserving compensation flow (not in this slice).
+
+### Why the approval columns live on the row (not just in the audit log)
+
+The decision (`approved_by`, `approved_at`, `approver_note`) lives on `leave_requests` itself, not derived from `audit_logs`. Two reasons:
+
+1. **Read performance.** Every list row needs "decided by X on Y date" in the column. Reconstructing that from the audit log per request would require a join + filter on every render.
+2. **Survivability.** The audit log is for historical replay; the columns are the **current state**. If the audit log were ever pruned (compliance retention policy), the decision metadata would still be present on the row.
+
+A composite DB CHECK constraint guarantees consistency: a `pending` row MUST have NULL approval columns; a non-`pending` row MUST have all approval columns populated. The Approve/Reject Actions write all three columns in a single save — defense in depth against partial state.
+
+### Edit vs Delete asymmetry on decided rows
+
+- **Edit** (`PATCH`): blocked on decided rows. The approver's decision was made against specific facts (dates, type, reason); editing them after approval would invalidate the meaning of the approval.
+- **Delete** (`DELETE`): allowed on decided rows. The "created in error" affordance survives the decision — a wrongly-submitted request can still be removed by anyone with `.delete` permission. Soft-delete preserves the audit row.
+
+### Full resource shape
+
+The full LeaveRequest shape returned by `show`, `store`, `update`, `approve`, `reject`:
+
+```json
+{
+    "data": {
+        "id": 17,
+        "employee": {
+            "id": 42,
+            "employee_code": "E-1001",
+            "full_name": "Sokha Chan"
+        },
+        "leave_type": "annual",
+        "start_date": "2026-06-15",
+        "end_date": "2026-06-19",
+        "reason": "Family wedding in Siem Reap.",
+        "status": "pending",
+        "approval": null,
+        "created_at": "2026-05-24T10:00:00+00:00",
+        "updated_at": "2026-05-24T10:00:00+00:00"
+    }
+}
+```
+
+For decided rows, `approval` is populated:
+
+```json
+"approval": {
+    "approved_at": "2026-05-24T14:30:00+00:00",
+    "approver": {
+        "id": 5,
+        "name": "Manager User"
+    },
+    "note": "Coverage arranged with Dara."
+}
+```
+
+`approval.approver` may be `null` if the approver user was hard-deleted (the FK is `ON DELETE SET NULL` — the decision survives without an attributed actor; the audit log preserves the full actor history regardless).
+
+### List shape (compact)
+
+The `index` response is compact for table density. Approval metadata is flattened to `approved_at` + `approver_name`:
+
+```json
+{
+    "data": [
+        {
+            "id": 17,
+            "employee_id": 42,
+            "employee_name": "Sokha Chan",
+            "employee_code": "E-1001",
+            "leave_type": "annual",
+            "start_date": "2026-06-15",
+            "end_date": "2026-06-19",
+            "status": "pending",
+            "approved_at": null,
+            "approver_name": null
+        }
+    ],
+    "meta": { "current_page": 1, "per_page": 25, "total": 17 }
+}
+```
+
+### Enum values
+
+- `leave_type`: `annual`, `sick`, `unpaid`, `other`
+- `status`: `pending`, `approved`, `rejected`
+
+### Endpoint: GET /api/v1/hrm/leave-requests
+
+**Permission**: `hrm.leave_request.view`
+
+**Query parameters** (all optional):
+
+| Param | Type | Notes |
+| --- | --- | --- |
+| `employee_id` | int | Scope to a single employee's requests. |
+| `status` | string | One of `pending` / `approved` / `rejected`. |
+| `leave_type` | string | One of the leave_type enum values. |
+| `from` | date | Lower bound — requests with `end_date >= from`. |
+| `to` | date | Upper bound — requests with `start_date <= to`. |
+| `per_page` | int (1–100) | Defaults to 25. |
+
+Default sort: `created_at DESC` — the newest pending requests rise to the top of a manager's inbox view.
+
+### Endpoint: GET /api/v1/hrm/leave-requests/{leaveRequest}
+
+**Permission**: `hrm.leave_request.view`
+
+Returns the full LeaveRequest shape. Cross-tenant / cross-company / soft-deleted ids return **404**.
+
+### Endpoint: POST /api/v1/hrm/leave-requests
+
+**Permission**: `hrm.leave_request.create`
+
+Create a new pending request.
+
+**Request body** example:
+
+```json
+{
+    "employee_id": 42,
+    "leave_type": "annual",
+    "start_date": "2026-06-15",
+    "end_date": "2026-06-19",
+    "reason": "Family wedding in Siem Reap."
+}
+```
+
+**Returns**: **201 Created** with the full shape (status will be `pending`).
+
+**Validation errors (422):**
+- `employee_id` is missing, not an integer, or does not point at a same-tenant + same-company + non-soft-deleted employee (load-bearing isolation guard).
+- `leave_type` is missing or not in the enum.
+- `start_date` / `end_date` are missing or not valid dates.
+- `end_date` is before `start_date`.
+- `reason` exceeds 500 characters.
+
+`status` and approval-related fields are **silently dropped** if submitted — the FormRequest doesn't validate them and the Action force-sets the row to `pending` with null approval columns.
+
+### Endpoint: PATCH /api/v1/hrm/leave-requests/{leaveRequest}
+
+**Permission**: `hrm.leave_request.update`
+
+Partial update of non-status fields on a **pending** request. All field constraints from `store` apply (`sometimes` rule lets fields be omitted).
+
+`status`, `approved_by`, `approved_at`, `approver_note` are not accepted at this layer — the only path into terminal states is `/approve` and `/reject`.
+
+**Transition error (422):** PATCH on a non-pending row returns:
+
+```json
+{
+    "message": "Cannot edit a leave request that is approved. Decided requests are read-only.",
+    "error_code": "invalid_transition",
+    "from": "approved",
+    "to": "approved"
+}
+```
+
+The `from` and `to` fields carry the same value here because the user wasn't trying to transition; they were trying to edit a state that forbids editing. The shape is identical to the `/approve` and `/reject` transition errors so the client renders one error path.
+
+### Endpoint: DELETE /api/v1/hrm/leave-requests/{leaveRequest}
+
+**Permission**: `hrm.leave_request.delete`
+
+Soft-delete a request. The row remains in the DB with `deleted_at` set; it disappears from list/show responses immediately.
+
+**Returns**: **204 No Content**.
+
+**Allowed on decided rows.** Unlike `PATCH`, `DELETE` is **not** gated by status — see the edit/delete asymmetry note above.
+
+### Endpoint: POST /api/v1/hrm/leave-requests/{leaveRequest}/approve
+
+**Permission**: `hrm.leave_request.approve` (the **decision-making** permission — gates this endpoint AND `/reject`).
+
+Transition a pending request to `approved`. Sets `approved_by` to the authenticated user, `approved_at` to the current instant, `approver_note` to the optional `note` from the body.
+
+**Request body:**
+
+```json
+{
+    "note": "Coverage arranged with Dara."
+}
+```
+
+`note` is optional (`null` is fine) and capped at 500 characters.
+
+**Returns**: **200 OK** with the full LeaveRequest shape including the populated `approval` block.
+
+**Transition error (422):** Calling `/approve` on a non-pending row returns the standard invalid-transition shape. Examples:
+
+- Already approved (double-approve): `{from: "approved", to: "approved"}`
+- Already rejected: `{from: "rejected", to: "approved"}`
+
+### Endpoint: POST /api/v1/hrm/leave-requests/{leaveRequest}/reject
+
+**Permission**: `hrm.leave_request.approve`
+
+Mirror of `/approve`. Transition a pending request to `rejected`. Same request body, same response shape (with `status="rejected"`).
+
+**Transition error (422):** Calling `/reject` on a non-pending row returns the standard shape:
+
+- Already rejected: `{from: "rejected", to: "rejected"}`
+- Already approved: `{from: "approved", to: "rejected"}`
+
+---
+
 ## Audit
 
 Every create / update / delete writes an entry to `audit_logs` with:
@@ -365,4 +594,9 @@ The following are **not** in the HRM module as shipped:
 - Bulk select / bulk delete, bulk department reassignment
 - Audit-log read endpoint
 - Per-company permission scoping (H1c) — `AuthorizesHrmAccess` chokepoint exists so H1c is a drop-in later
-- Approval workflow, leave, attendance, payroll
+- Attendance, payroll
+- A generalized approval workflow primitive (the `app/Support/Workflow/` module). The leave-request state machine is currently bespoke to the resource; if/when a second approval flow lands (e.g. accounting journal entries, purchase requisitions) the shared workflow primitive is the right factoring point. Until then, premature.
+- Re-open transitions for decided leave requests (delete + re-submit covers the current need)
+- Calendar / cross-team overlap views, leave balances, accruals, half-day or hourly requests
+- Email/Slack notifications to the requester or manager
+- Bulk approve/reject

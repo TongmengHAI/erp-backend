@@ -5,8 +5,11 @@ declare(strict_types=1);
 use App\Web\API\V1\Controllers\Auth\LoginController;
 use App\Web\API\V1\Controllers\Auth\LogoutController;
 use App\Web\API\V1\Controllers\Auth\MeController;
+use App\Web\API\V1\Controllers\HRM\ApproveLeaveRequestController;
 use App\Web\API\V1\Controllers\HRM\DepartmentController;
 use App\Web\API\V1\Controllers\HRM\EmployeeController;
+use App\Web\API\V1\Controllers\HRM\LeaveRequestController;
+use App\Web\API\V1\Controllers\HRM\RejectLeaveRequestController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/health', fn () => [
@@ -52,5 +55,21 @@ Route::middleware(['auth:sanctum', 'tenant', 'company'])->group(function (): voi
             ->parameters(['employees' => 'employee']);
         Route::apiResource('departments', DepartmentController::class)
             ->parameters(['departments' => 'department']);
+
+        // Leave Requests — standard CRUD on the resource, plus two
+        // dedicated transition endpoints. The transition endpoints are
+        // NOT methods on LeaveRequestController because they have a
+        // different permission (.approve = decision-making authority,
+        // separate from .update which is for editing pending content),
+        // a different request shape (just `note`), and a different domain
+        // Action. Co-locating them would conflate three orthogonal
+        // responsibilities.
+        Route::apiResource('leave-requests', LeaveRequestController::class)
+            ->parameters(['leave-requests' => 'leaveRequest']);
+
+        Route::post('leave-requests/{leaveRequest}/approve', ApproveLeaveRequestController::class)
+            ->name('hrm.leave-requests.approve');
+        Route::post('leave-requests/{leaveRequest}/reject', RejectLeaveRequestController::class)
+            ->name('hrm.leave-requests.reject');
     });
 });

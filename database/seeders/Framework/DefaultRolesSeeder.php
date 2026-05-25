@@ -65,6 +65,20 @@ final class DefaultRolesSeeder extends Seeder
                 'hrm.department.create',
                 'hrm.department.update',
                 'hrm.department.delete',
+                // tenant_admin gets all five leave_request perms,
+                // including .approve. .approve represents decision-making
+                // authority — gates BOTH /approve and /reject (a manager
+                // has decision authority, not "approval-only" authority).
+                // A future "team_lead" role would get .view + .approve
+                // (decide on requests but no CRUD); a future "employee"
+                // role would get .view + .create + .update + .delete on
+                // their own rows (no .approve). Splitting is cheap now,
+                // splitting later breaks existing assignments.
+                'hrm.leave_request.view',
+                'hrm.leave_request.create',
+                'hrm.leave_request.update',
+                'hrm.leave_request.delete',
+                'hrm.leave_request.approve',
             ],
             'accountant' => [
                 'accounting.journal_entry.view',
@@ -74,6 +88,10 @@ final class DefaultRolesSeeder extends Seeder
                 'accounting.journal_entry.view',
                 'hrm.employee.view',
                 'hrm.department.view',
+                // viewer can see leave requests but cannot create, edit,
+                // delete, or decide. Read-only is the right grant level
+                // for an auditor or finance read-out persona.
+                'hrm.leave_request.view',
             ],
         ];
     }

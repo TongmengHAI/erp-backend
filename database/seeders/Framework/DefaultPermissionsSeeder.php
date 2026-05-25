@@ -80,6 +80,21 @@ final class DefaultPermissionsSeeder extends Seeder
             'hrm.department.create',
             'hrm.department.update',
             'hrm.department.delete',
+            // hrm.leave_request — five permissions, not four. .approve is
+            // separate from .update because they represent different
+            // authority kinds: .update is "edit pending content," .approve
+            // is "decision-making authority" (gates both /approve and
+            // /reject — a manager has decision authority, not approval-only
+            // authority). Splitting them means a tenant_admin who wants to
+            // delegate decision-making without granting full edit rights
+            // can do so on Day 1 (assign .view+.approve to a "manager"
+            // role) without us needing a Day-2 permission split that
+            // breaks existing role assignments.
+            'hrm.leave_request.view',
+            'hrm.leave_request.create',
+            'hrm.leave_request.update',
+            'hrm.leave_request.delete',
+            'hrm.leave_request.approve',
         ];
     }
 }

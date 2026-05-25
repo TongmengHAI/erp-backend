@@ -6,8 +6,11 @@ namespace Database\Seeders\Demo;
 
 use App\Domain\HRM\Enums\DepartmentStatus;
 use App\Domain\HRM\Enums\EmployeeStatus;
+use App\Domain\HRM\Enums\LeaveRequestStatus;
+use App\Domain\HRM\Enums\LeaveType;
 use App\Domain\HRM\Models\Department;
 use App\Domain\HRM\Models\Employee;
+use App\Domain\HRM\Models\LeaveRequest;
 use App\Models\Company;
 use App\Models\Tenant;
 use App\Models\User;
@@ -233,6 +236,139 @@ final class DemoUsersSeeder extends Seeder
             ])->save();
         }
 
+        // ─── manager@acme.test — workflow demo approver ──────────────────────
+        // Separate user so the demo leave_requests show real workflow
+        // attribution ("Approved by Manager User") rather than the surreal
+        // "approved by yourself" if the same admin had decided their own
+        // requests. Same tenant_admin role for simplicity — the role split
+        // (.approve as a standalone "team_lead" role) is future work.
+        $manager = User::query()->firstOrCreate(
+            ['email' => 'manager@acme.test'],
+            [
+                'name' => 'Manager User',
+                'password' => Hash::make('password'),
+                'email_verified_at' => now(),
+                'tenant_id' => $acmeTenant->id,
+                'current_tenant_id' => $acmeTenant->id,
+            ],
+        );
+        app(BackfillUsersToCompanyAction::class)->execute($acmeCompany);
+        $manager->assignTenantRole($acmeTenant, 'tenant_admin');
+
+        // ─── Demo leave_requests (5 rows: mix of states) ─────────────────────
+        // Spread across statuses so the list page exercises the filter UI
+        // and the badge rendering, and so the detail page demonstrates both
+        // the pending and decided shapes (the decided-by panel).
+        //
+        // Why direct write of approval columns (not via Actions):
+        // routing the approved/rejected rows through Approve/RejectAction
+        // would generate audit_log entries time-stamped at seed-time with
+        // actor=null (no auth context), misleading anyone reading the audit
+        // history as "this row was approved by the system at install time."
+        // The actual workflow attribution lives in the row itself
+        // (approved_by + approved_at + approver_note), which is what the
+        // UI reads. The audit log for these rows correctly shows only the
+        // 'created' event from the firstOrCreate INSERT.
+        //
+        // Composite DB CHECK (status, approved_by, approved_at) is
+        // satisfied because every approved/rejected row writes all three
+        // columns in the same INSERT — that's the regression-protected
+        // invariant the seeder/CHECK guard test asserts.
+        $employeesByCode = Employee::query()
+            ->where('tenant_id', $acmeTenant->id)
+            ->where('company_id', $acmeCompany->id)
+            ->get()
+            ->keyBy('employee_code');
+
+        $now = now();
+
+        $demoLeaveRequests = [
+            // 2 pending — fresh requests in the manager's inbox
+            [
+                'employee_code' => 'E-1001',
+                'leave_type' => LeaveType::Annual,
+                'start_date' => '2026-06-15',
+                'end_date' => '2026-06-19',
+                'reason' => 'Family wedding in Siem Reap.',
+                'status' => LeaveRequestStatus::Pending,
+                'approved_by' => null,
+                'approved_at' => null,
+                'approver_note' => null,
+            ],
+            [
+                'employee_code' => 'E-1003',
+                'leave_type' => LeaveType::Sick,
+                'start_date' => '2026-05-28',
+                'end_date' => '2026-05-29',
+                'reason' => 'Flu — doctor recommended two days rest.',
+                'status' => LeaveRequestStatus::Pending,
+                'approved_by' => null,
+                'approved_at' => null,
+                'approver_note' => null,
+            ],
+            // 2 approved by Manager — historical decided rows
+            [
+                'employee_code' => 'E-1002',
+                'leave_type' => LeaveType::Annual,
+                'start_date' => '2026-04-10',
+                'end_date' => '2026-04-14',
+                'reason' => 'Khmer New Year extended break.',
+                'status' => LeaveRequestStatus::Approved,
+                'approved_by' => $manager->id,
+                'approved_at' => $now->copy()->subDays(40),
+                'approver_note' => 'Approved — coverage arranged with Dara.',
+            ],
+            [
+                'employee_code' => 'E-1005',
+                'leave_type' => LeaveType::Unpaid,
+                'start_date' => '2026-03-01',
+                'end_date' => '2026-03-05',
+                'reason' => 'Personal travel.',
+                'status' => LeaveRequestStatus::Approved,
+                'approved_by' => $manager->id,
+                'approved_at' => $now->copy()->subDays(85),
+                'approver_note' => null,
+            ],
+            // 1 rejected by Manager
+            [
+                'employee_code' => 'E-1003',
+                'leave_type' => LeaveType::Other,
+                'start_date' => '2026-05-02',
+                'end_date' => '2026-05-03',
+                'reason' => 'Personal errand.',
+                'status' => LeaveRequestStatus::Rejected,
+                'approved_by' => $manager->id,
+                'approved_at' => $now->copy()->subDays(20),
+                'approver_note' => 'Two sales calls already booked that week — please reschedule.',
+            ],
+        ];
+
+        foreach ($demoLeaveRequests as $row) {
+            $employee = $employeesByCode[$row['employee_code']] ?? null;
+            if ($employee === null) {
+                continue;
+            }
+            // Idempotent on (tenant, company, employee, start_date, leave_type)
+            // — re-runs find the existing row instead of duplicating.
+            LeaveRequest::query()->firstOrCreate(
+                [
+                    'tenant_id' => $acmeTenant->id,
+                    'company_id' => $acmeCompany->id,
+                    'employee_id' => $employee->id,
+                    'start_date' => $row['start_date'],
+                    'leave_type' => $row['leave_type'],
+                ],
+                [
+                    'end_date' => $row['end_date'],
+                    'reason' => $row['reason'],
+                    'status' => $row['status'],
+                    'approved_by' => $row['approved_by'],
+                    'approved_at' => $row['approved_at'],
+                    'approver_note' => $row['approver_note'],
+                ],
+            );
+        }
+
         // Clear CompanyContext before moving on to the suspended-tenant block,
         // which has its own company context concerns handled inside asSystem.
         app(CompanyContext::class)->setCurrent(null);
@@ -293,7 +429,7 @@ final class DemoUsersSeeder extends Seeder
         unset($suspendedUser);
 
         $this->command->info(
-            'DemoUsersSeeder: seeded admin@acme.test (Acme Trading Co., active, bound to Acme Trading Co. company) + suspended@acme.test (Suspended Co., suspended).'
+            'DemoUsersSeeder: seeded admin@acme.test + manager@acme.test (Acme Trading Co., active) + suspended@acme.test (Suspended Co., suspended). 5 demo leave_requests seeded (2 pending, 2 approved, 1 rejected — decided rows attributed to Manager User).'
         );
     }
 }

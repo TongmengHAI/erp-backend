@@ -1,0 +1,69 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Domain\HRM\Actions;
+
+use App\Domain\HRM\Enums\LeaveRequestStatus;
+use App\Domain\HRM\Exceptions\InvalidLeaveRequestTransitionException;
+use App\Domain\HRM\Models\LeaveRequest;
+use Illuminate\Support\Facades\DB;
+
+/**
+ * Update non-status fields on a leave_request — ONLY while pending.
+ *
+ * Terminal states (approved, rejected) are read-only at this layer:
+ * decided requests cannot have their content edited because the
+ * approver's decision was made against specific facts. Editing the
+ * dates/type/reason after approval would invalidate the approval
+ * meaning. The Delete affordance still exists (for "created in error")
+ * via .delete permission, but Edit does not.
+ *
+ * This Action throws InvalidLeaveRequestTransitionException if invoked
+ * on a non-pending row. The exception self-renders as 422 with
+ * error_code='invalid_transition' + from/to fields — no controller
+ * try/catch needed.
+ *
+ * Status, approved_by, approved_at, approver_note are NOT in the
+ * accepted fields — they only move through the dedicated Approve/
+ * Reject Actions. The UpdateLeaveRequestRequest doesn't validate them
+ * either; even if submitted they're silently ignored at the request
+ * layer, and this Action's $data signature doesn't accept them.
+ */
+final class UpdateLeaveRequestAction
+{
+    /**
+     * @param  array{
+     *     employee_id?: int,
+     *     leave_type?: string,
+     *     start_date?: string,
+     *     end_date?: string,
+     *     reason?: string|null,
+     * }  $data
+     */
+    public function execute(LeaveRequest $request, array $data): LeaveRequest
+    {
+        if ($request->status !== LeaveRequestStatus::Pending) {
+            // The "to" status is the same as "from" — the user wasn't
+            // trying to transition, they were trying to edit. The
+            // exception name "InvalidTransition" covers both "trying
+            // to move state" and "trying to act on a state that
+            // forbids action." Self-rendered as 422.
+            throw new InvalidLeaveRequestTransitionException(
+                from: $request->status,
+                to: $request->status,
+                message: sprintf(
+                    'Cannot edit a leave request that is %s. Decided requests are read-only.',
+                    $request->status->value,
+                ),
+            );
+        }
+
+        return DB::transaction(function () use ($request, $data): LeaveRequest {
+            $request->fill($data);
+            $request->save();
+
+            return $request->refresh();
+        });
+    }
+}
