@@ -10,6 +10,7 @@ declare(strict_types=1);
 // ─────────────────────────────────────────────────────────────────────────────
 
 use App\Domain\HRM\Enums\EmployeeStatus;
+use App\Domain\HRM\Models\Department;
 use App\Domain\HRM\Models\Employee;
 use App\Models\Company;
 use App\Models\Tenant;
@@ -132,4 +133,47 @@ it('filters by ?search= matching either full_name or employee_code (case-insensi
     expect($this->getJson('/api/v1/hrm/employees?search=E-BBB')->json('meta.total'))->toBe(1);
     // No match
     expect($this->getJson('/api/v1/hrm/employees?search=nonexistent')->json('meta.total'))->toBe(0);
+});
+
+it('filters by ?department_id= and surfaces department_name in the list rows', function (): void {
+    $opsDept = Department::factory()
+        ->forCompany($this->company)
+        ->create(['name' => 'Operations']);
+    $finDept = Department::factory()
+        ->forCompany($this->company)
+        ->create(['name' => 'Finance']);
+
+    $opsEmp = Employee::factory()->forCompany($this->company)->create(['full_name' => 'In Ops']);
+    $opsEmp->forceFill(['department_id' => $opsDept->id])->save();
+    $finEmp = Employee::factory()->forCompany($this->company)->create(['full_name' => 'In Fin']);
+    $finEmp->forceFill(['department_id' => $finDept->id])->save();
+    Employee::factory()->forCompany($this->company)->create(['full_name' => 'Unassigned']);
+
+    $this->actingAs($this->admin);
+
+    // Filter narrows to one row.
+    $body = $this->getJson("/api/v1/hrm/employees?department_id={$opsDept->id}")
+        ->assertOk()->json();
+    expect($body['meta']['total'])->toBe(1);
+    expect($body['data'][0]['full_name'])->toBe('In Ops');
+    // List shape carries department_name (not the nested object).
+    expect($body['data'][0]['department_name'])->toBe('Operations');
+
+    // Cross-company department id silently returns empty (no 422; the scope
+    // simply doesn't match).
+    $otherCompany = Company::factory()->forTenant($this->tenant)->create();
+    $foreignDept = Department::factory()
+        ->forCompany($otherCompany)
+        ->create();
+    expect($this->getJson("/api/v1/hrm/employees?department_id={$foreignDept->id}")
+        ->json('meta.total'))->toBe(0);
+});
+
+it('list rows carry department_name=null for employees with no department', function (): void {
+    Employee::factory()->forCompany($this->company)->create(['full_name' => 'Solo']);
+
+    $this->actingAs($this->admin);
+    $body = $this->getJson('/api/v1/hrm/employees')->assertOk()->json();
+
+    expect($body['data'][0]['department_name'])->toBeNull();
 });

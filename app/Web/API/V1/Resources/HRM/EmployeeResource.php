@@ -29,6 +29,19 @@ class EmployeeResource extends JsonResource
             'full_name' => $this->full_name,
             'email' => $this->email,
             'job_title' => $this->job_title,
+            // Nested department snapshot — flat array projection rather than
+            // a nested DepartmentResource. Avoids over-fetching department
+            // metadata (description, timestamps, status) into every employee
+            // payload, and keeps the response shape obvious. Null when the
+            // employee has no current department OR the department row is
+            // soft-deleted (belongsTo respects SoftDeletes on the parent).
+            'department' => $this->department
+                ? [
+                    'id' => $this->department->id,
+                    'code' => $this->department->code,
+                    'name' => $this->department->name,
+                ]
+                : null,
             'hire_date' => $this->hire_date->toDateString(),
             'status' => $this->status->value,
             'created_at' => $this->created_at->toIso8601String(),

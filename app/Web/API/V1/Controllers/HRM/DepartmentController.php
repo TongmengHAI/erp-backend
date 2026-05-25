@@ -70,6 +70,14 @@ class DepartmentController extends Controller
         // Route-model binding already filtered by tenant + company (global
         // scopes apply to the implicit query). If $department resolved, the
         // user has structural access; we still gate the permission above.
+        //
+        // loadCount pre-populates `employees_count` so the resource's
+        // accessor reads the attribute directly instead of running a
+        // count() subquery on serialisation. The Employee global scopes
+        // (TenantScope + CompanyScope) apply to the subquery — counts
+        // never leak across tenant or company.
+        $department->loadCount('employees');
+
         return new DepartmentResource($department);
     }
 

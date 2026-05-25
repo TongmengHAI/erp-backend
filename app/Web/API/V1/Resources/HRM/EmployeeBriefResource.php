@@ -24,6 +24,12 @@ class EmployeeBriefResource extends JsonResource
             'id' => $this->id,
             'employee_code' => $this->employee_code,
             'full_name' => $this->full_name,
+            // department_name (not _code) — codes next to job_title would
+            // create visual code-twin noise (E-1001 / D-OPS / Operations
+            // Manager all in the same row). The name reads natural.
+            // Eager-loaded via `with('department')` on the controller's
+            // index query to avoid N+1.
+            'department_name' => $this->department?->name,
             'job_title' => $this->job_title,
             'hire_date' => $this->hire_date->toDateString(),
             'status' => $this->status->value,

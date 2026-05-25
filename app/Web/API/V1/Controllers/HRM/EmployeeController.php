@@ -43,10 +43,19 @@ class EmployeeController extends Controller
             'search' => ['sometimes', 'nullable', 'string', 'max:255'],
             'status' => ['sometimes', 'nullable', 'string',
                 Rule::in(array_column(EmployeeStatus::cases(), 'value'))],
+            // Per-department filter. Cross-tenant department ids return empty
+            // results (the Employee scope simply won't match) rather than a
+            // 422 — that's correct: the param is just a where clause, not a
+            // resource lookup. The load-bearing isolation lives in the
+            // form-request side of the FK.
+            'department_id' => ['sometimes', 'nullable', 'integer'],
             'per_page' => ['sometimes', 'integer', 'min:1', 'max:100'],
         ]);
 
-        $query = Employee::query()->orderBy('full_name');
+        // Eager-load department so EmployeeBriefResource's `department_name`
+        // accessor is a single attribute read, not a per-row query (N+1
+        // protection on a paginated list endpoint).
+        $query = Employee::query()->with('department')->orderBy('full_name');
 
         if (! empty($validated['search'])) {
             $needle = '%'.$validated['search'].'%';
@@ -58,6 +67,16 @@ class EmployeeController extends Controller
 
         if (! empty($validated['status'])) {
             $query->where('status', $validated['status']);
+        }
+
+        // array_key_exists (not !empty) — the contract is: param present and
+        // numeric ⇒ filter on it; param absent ⇒ no filter. We deliberately
+        // do NOT accept `?department_id=` (empty string) as "employees with
+        // no department" — that would be a separate `?has_department=false`
+        // semantic for a future slice if needed.
+        if (array_key_exists('department_id', $validated)
+            && $validated['department_id'] !== null) {
+            $query->where('department_id', $validated['department_id']);
         }
 
         $perPage = (int) ($validated['per_page'] ?? 25);
@@ -72,6 +91,10 @@ class EmployeeController extends Controller
         // Route-model binding already filtered by tenant + company (global
         // scopes apply to the implicit query). If $employee resolved, the
         // user has structural access; we still gate the permission above.
+        // Eager-load department for the resource projection — single read
+        // rather than the relation triggering a second query inside toArray.
+        $employee->load('department');
+
         return new EmployeeResource($employee);
     }
 
@@ -79,9 +102,13 @@ class EmployeeController extends Controller
     {
         $this->authorizeHrm($request, 'hrm.employee.create');
 
-        /** @var array{employee_code: string, full_name: string, email?: string|null, job_title?: string|null, hire_date: string, status: string} $data */
+        /** @var array{employee_code: string, full_name: string, email?: string|null, job_title?: string|null, department_id?: int|null, hire_date: string, status: string} $data */
         $data = $request->validated();
         $employee = $action->execute($data);
+        // Load department for the response so the SPA can show it on the
+        // detail page it redirects to. The action refresh() reloaded the
+        // attributes; this loads the relation.
+        $employee->load('department');
 
         return (new EmployeeResource($employee))
             ->response()
@@ -92,9 +119,10 @@ class EmployeeController extends Controller
     {
         $this->authorizeHrm($request, 'hrm.employee.update');
 
-        /** @var array{employee_code?: string, full_name?: string, email?: string|null, job_title?: string|null, hire_date?: string, status?: string} $data */
+        /** @var array{employee_code?: string, full_name?: string, email?: string|null, job_title?: string|null, department_id?: int|null, hire_date?: string, status?: string} $data */
         $data = $request->validated();
         $employee = $action->execute($employee, $data);
+        $employee->load('department');
 
         return new EmployeeResource($employee);
     }

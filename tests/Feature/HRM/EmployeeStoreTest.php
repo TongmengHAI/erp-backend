@@ -7,6 +7,7 @@ declare(strict_types=1);
 // Full §7.D 5-test pattern + cross-tenant + cross-company isolation.
 // ─────────────────────────────────────────────────────────────────────────────
 
+use App\Domain\HRM\Models\Department;
 use App\Domain\HRM\Models\Employee;
 use App\Models\Company;
 use App\Models\Tenant;
@@ -135,4 +136,74 @@ it('isolates cross-tenant — a created employee belongs to the admin tenant, ne
     $row = Employee::query()->where('employee_code', 'E-NEW1')->firstOrFail();
     expect($row->tenant_id)->toBe($this->tenant->id);
     expect($row->tenant_id)->not->toBe($foreignTenant->id);
+});
+
+// ─── Department FK scenarios ─────────────────────────────────────────────────
+
+it('creates an employee with a valid same-company department_id and persists the FK', function (): void {
+    $department = Department::factory()
+        ->forCompany($this->company)
+        ->create();
+
+    $this->actingAs($this->admin);
+    $response = $this->postJson('/api/v1/hrm/employees', validEmployeePayload([
+        'department_id' => $department->id,
+    ]));
+
+    $response->assertStatus(Response::HTTP_CREATED);
+    $response->assertJsonPath('data.department.id', $department->id);
+    $response->assertJsonPath('data.department.code', $department->code);
+    $response->assertJsonPath('data.department.name', $department->name);
+
+    expect(Employee::query()->where('employee_code', 'E-NEW1')->firstOrFail()->department_id)
+        ->toBe($department->id);
+});
+
+it('creates an employee with department_id=null (no department) and persists null', function (): void {
+    $this->actingAs($this->admin);
+    $response = $this->postJson('/api/v1/hrm/employees', validEmployeePayload([
+        'department_id' => null,
+    ]));
+
+    $response->assertStatus(Response::HTTP_CREATED);
+    $response->assertJsonPath('data.department', null);
+});
+
+it('rejects 422 when department_id points at a department in another company (same tenant)', function (): void {
+    // The LOAD-BEARING isolation test. A client passes a department_id for a
+    // department in a different company within the same tenant. Without the
+    // scoped-exists where() in StoreEmployeeRequest, this would persist —
+    // a cross-company data leak through an unguarded FK. With the where(),
+    // 422 with errors.department_id.
+    $otherCompany = Company::factory()->forTenant($this->tenant)->create();
+    $foreignDepartment = Department::factory()
+        ->forCompany($otherCompany)
+        ->create();
+
+    $this->actingAs($this->admin);
+    $response = $this->postJson('/api/v1/hrm/employees', validEmployeePayload([
+        'department_id' => $foreignDepartment->id,
+    ]));
+
+    $response->assertStatus(422);
+    $response->assertJsonValidationErrors('department_id');
+    // The row must not have been created.
+    expect(Employee::query()->where('employee_code', 'E-NEW1')->exists())->toBeFalse();
+});
+
+it('rejects 422 when department_id points at a department in another tenant', function (): void {
+    // Same load-bearing isolation, cross-tenant variant.
+    $otherTenant = Tenant::factory()->create();
+    $otherCompany = Company::factory()->forTenant($otherTenant)->create();
+    $foreignDepartment = Department::factory()
+        ->forCompany($otherCompany)
+        ->create();
+
+    $this->actingAs($this->admin);
+    $response = $this->postJson('/api/v1/hrm/employees', validEmployeePayload([
+        'department_id' => $foreignDepartment->id,
+    ]));
+
+    $response->assertStatus(422);
+    $response->assertJsonValidationErrors('department_id');
 });

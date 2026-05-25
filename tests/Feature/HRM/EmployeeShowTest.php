@@ -11,6 +11,7 @@ declare(strict_types=1);
 // user's scoped query), not 403.
 // ─────────────────────────────────────────────────────────────────────────────
 
+use App\Domain\HRM\Models\Department;
 use App\Domain\HRM\Models\Employee;
 use App\Models\Company;
 use App\Models\Tenant;
@@ -97,4 +98,30 @@ it('returns 200 with status reflecting EmployeeStatus enum string value', functi
 
     $response->assertOk();
     expect($response->json('data.status'))->toBeIn(['active', 'on_leave', 'terminated']);
+});
+
+// ─── Department FK projection on show ─────────────────────────────────────────
+
+it('includes nested department { id, code, name } when the employee has a department', function (): void {
+    $department = Department::factory()
+        ->forCompany($this->company)
+        ->create(['code' => 'D-OPS', 'name' => 'Operations']);
+    $this->employee->forceFill(['department_id' => $department->id])->save();
+
+    $this->actingAs($this->admin);
+    $response = $this->getJson("/api/v1/hrm/employees/{$this->employee->id}");
+
+    $response->assertOk();
+    $response->assertJsonPath('data.department.id', $department->id);
+    $response->assertJsonPath('data.department.code', 'D-OPS');
+    $response->assertJsonPath('data.department.name', 'Operations');
+});
+
+it('returns department: null when the employee has no department', function (): void {
+    // The beforeEach employee defaults to department_id = null.
+    $this->actingAs($this->admin);
+    $response = $this->getJson("/api/v1/hrm/employees/{$this->employee->id}");
+
+    $response->assertOk();
+    $response->assertJsonPath('data.department', null);
 });

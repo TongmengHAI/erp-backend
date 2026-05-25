@@ -12,6 +12,7 @@ declare(strict_types=1);
 // ─────────────────────────────────────────────────────────────────────────────
 
 use App\Domain\HRM\Models\Department;
+use App\Domain\HRM\Models\Employee;
 use App\Models\Company;
 use App\Models\Tenant;
 use App\Models\User;
@@ -98,4 +99,30 @@ it('returns 200 with status reflecting DepartmentStatus enum string value', func
 
     $response->assertOk();
     expect($response->json('data.status'))->toBeIn(['active', 'archived']);
+});
+
+it('includes employees_count matching the actual number of employees in this department', function (): void {
+    // Three same-company employees attached to this department, two
+    // unattached, plus one in a different department of the same company.
+    // employees_count for $this->department must be exactly 3.
+    Employee::factory()
+        ->forCompany($this->company)
+        ->count(3)
+        ->create(['department_id' => $this->department->id]);
+    Employee::factory()
+        ->forCompany($this->company)
+        ->count(2)
+        ->create(['department_id' => null]);
+    $otherDept = Department::factory()
+        ->forCompany($this->company)
+        ->create();
+    Employee::factory()
+        ->forCompany($this->company)
+        ->create(['department_id' => $otherDept->id]);
+
+    $this->actingAs($this->admin);
+    $response = $this->getJson("/api/v1/hrm/departments/{$this->department->id}");
+
+    $response->assertOk();
+    $response->assertJsonPath('data.employees_count', 3);
 });

@@ -11,6 +11,7 @@ use App\Support\Tenancy\Concerns\BelongsToTenant;
 use Database\Factories\HRM\EmployeeFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Carbon;
 
@@ -22,11 +23,13 @@ use Illuminate\Support\Carbon;
  * @property string $full_name
  * @property string|null $email
  * @property string|null $job_title
+ * @property int|null $department_id
  * @property Carbon $hire_date
  * @property EmployeeStatus $status
  * @property Carbon $created_at
  * @property Carbon $updated_at
  * @property Carbon|null $deleted_at
+ * @property Department|null $department
  */
 class Employee extends Model
 {
@@ -46,6 +49,7 @@ class Employee extends Model
         'full_name',
         'email',
         'job_title',
+        'department_id',
         'hire_date',
         'status',
     ];
@@ -57,6 +61,19 @@ class Employee extends Model
             'hire_date' => 'date',
             'status' => EmployeeStatus::class,
         ];
+    }
+
+    /**
+     * The employee's current department within the same (tenant, company).
+     * Nullable — see migration notes on the FK. belongsTo respects
+     * SoftDeletes on the parent, so a soft-deleted department returns
+     * null here and the UI displays "—".
+     *
+     * @return BelongsTo<Department, $this>
+     */
+    public function department(): BelongsTo
+    {
+        return $this->belongsTo(Department::class);
     }
 
     protected static function newFactory(): EmployeeFactory

@@ -31,6 +31,12 @@ class DepartmentResource extends JsonResource
             'name' => $this->name,
             'description' => $this->description,
             'status' => $this->status->value,
+            // Derived count of employees currently in this department.
+            // DepartmentController::show pre-populates via loadCount()
+            // so this is a single attribute read, not a subquery per
+            // serialisation. List endpoints (Brief resource) do NOT
+            // include this — it's detail-page chrome only.
+            'employees_count' => $this->employees_count,
             'created_at' => $this->created_at->toIso8601String(),
             'updated_at' => $this->updated_at->toIso8601String(),
         ];

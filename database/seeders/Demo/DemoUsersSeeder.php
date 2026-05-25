@@ -31,8 +31,11 @@ use Illuminate\Support\Facades\Hash;
  *     └── Company: Acme Trading Co. (active)
  *           ├── admin@acme.test / password — tenant_admin role
  *           ├── 6 employees (mix of statuses: active / on_leave / terminated)
- *           └── 4 departments (3 active: Operations, Finance, Sales;
- *                              1 archived: Warehouse)
+ *           ├── 4 departments (3 active: Operations, Finance, Sales;
+ *           │                  1 archived: Warehouse)
+ *           └── 5 of 6 employees assigned to departments (Operations × 2,
+ *               Finance × 2, Sales × 1; Vichea on leave is unattached
+ *               to exercise the nullable-department state)
  *
  *   Tenant: Suspended Co. (status=suspended)
  *     └── Company: Suspended Co. (active — the suspension is the tenant's)
@@ -184,6 +187,50 @@ final class DemoUsersSeeder extends Seeder
                     'status' => $row['status'],
                 ],
             );
+        }
+
+        // ─── Backfill: assign demo employees to demo departments ─────────────
+        // Realistic spread: 5 employees attached, 1 unattached. Both nullable
+        // states are visible in the UI. Counts per department vary so the
+        // Department detail's "X employees" line shows >1, =1, and 0.
+        //
+        //   Operations (D-OPS): Sokha + Channary    → count=2
+        //   Finance    (D-FIN): Rithy + Dara        → count=2
+        //   Sales      (D-SALES): Bopha             → count=1
+        //   Warehouse  (D-WHSE, archived): —        → count=0
+        //   Vichea (on leave, formerly Warehouse): department_id=null
+        //
+        // Idempotent: re-running the seeder no-ops because the employee_id ↔
+        // department_code pairs are stable across runs. Uses forceFill->save
+        // rather than the action layer because seeding is not a user
+        // operation and shouldn't write audit rows for assignments that
+        // didn't happen at a user-meaningful moment.
+        $departmentByCode = Department::query()
+            ->where('tenant_id', $acmeTenant->id)
+            ->where('company_id', $acmeCompany->id)
+            ->pluck('id', 'code');
+
+        $assignments = [
+            'E-1001' => 'D-OPS',    // Sokha — Operations Manager
+            'E-1002' => 'D-FIN',    // Rithy — Senior Accountant
+            'E-1003' => 'D-SALES',  // Bopha — Sales Lead
+            'E-1004' => null,       // Vichea — on leave, formerly Warehouse (archived)
+            'E-1005' => 'D-OPS',    // Channary — HR Coordinator (rolls under Ops)
+            'E-1006' => 'D-FIN',    // Dara — Junior Accountant (terminated, kept on record)
+        ];
+
+        foreach ($assignments as $empCode => $deptCode) {
+            $employee = Employee::query()
+                ->where('tenant_id', $acmeTenant->id)
+                ->where('company_id', $acmeCompany->id)
+                ->where('employee_code', $empCode)
+                ->first();
+            if ($employee === null) {
+                continue;
+            }
+            $employee->forceFill([
+                'department_id' => $deptCode !== null ? $departmentByCode[$deptCode] ?? null : null,
+            ])->save();
         }
 
         // Clear CompanyContext before moving on to the suspended-tenant block,

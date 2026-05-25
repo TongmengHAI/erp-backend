@@ -66,6 +66,11 @@ The full Employee shape returned by `show`, `store`, and `update`:
         "full_name": "Sokha Chan",
         "email": "sokha.chan@acme.test",
         "job_title": "Operations Manager",
+        "department": {
+            "id": 1,
+            "code": "D-OPS",
+            "name": "Operations"
+        },
         "hire_date": "2022-03-15",
         "status": "active",
         "created_at": "2026-05-19T10:00:00+00:00",
@@ -74,7 +79,9 @@ The full Employee shape returned by `show`, `store`, and `update`:
 }
 ```
 
-The list (`index`) response uses a compact shape — no `created_at`/`updated_at`/`email`:
+`department` is `null` when the employee has no current department, or when the assigned department has been soft-deleted (the FK still references the tombstone row but the relation returns null).
+
+The list (`index`) response uses a compact shape — no `created_at`/`updated_at`/`email`, and `department` is flattened to a single `department_name` string:
 
 ```json
 {
@@ -83,6 +90,7 @@ The list (`index`) response uses a compact shape — no `created_at`/`updated_at
             "id": 42,
             "employee_code": "E-1001",
             "full_name": "Sokha Chan",
+            "department_name": "Operations",
             "job_title": "Operations Manager",
             "hire_date": "2022-03-15",
             "status": "active"
@@ -103,6 +111,7 @@ The list (`index`) response uses a compact shape — no `created_at`/`updated_at
 | `full_name` | string ≤ 255 | yes | Display name. No structured first/last split in this slice. |
 | `email` | string ≤ 255 or `null` | no | Standard email format if provided. Not unique. |
 | `job_title` | string ≤ 255 or `null` | no | Plain text — not linked to a Positions table in this slice. |
+| `department_id` | int or `null` | no | FK → `departments.id`. MUST point at a department in the same `(tenant, company)` — enforced via scoped `exists` validation. A foreign-tenant or foreign-company id returns **422** with `errors.department_id`. ON DELETE SET NULL: if the department is hard-deleted, the field clears; soft-delete leaves the FK but the relation returns null. |
 | `hire_date` | ISO 8601 date (`YYYY-MM-DD`) | yes | Stored as DATE. No time component. |
 | `status` | enum | yes | One of `active`, `on_leave`, `terminated`. |
 
@@ -126,6 +135,7 @@ List employees in the current `(tenant, company)`. Paginated.
 | --- | --- | --- | --- |
 | `search` | string ≤ 255 | no | Case-insensitive partial match against `full_name` OR `employee_code` (PostgreSQL ILIKE). |
 | `status` | enum | no | One of `active`, `on_leave`, `terminated`. |
+| `department_id` | int | no | Filter to a specific department. Cross-tenant or cross-company ids silently return empty results (the global scopes don't match) — no 422, no leak. Used by the Department detail page's "View employees" link. |
 | `per_page` | int 1–100 | no | Default 25. |
 | `page` | int ≥ 1 | no | Default 1. Standard Laravel pagination. |
 
@@ -153,6 +163,7 @@ Create a new employee. `tenant_id` and `company_id` are derived from the request
     "full_name": "New Hire",
     "email": "new@acme.test",
     "job_title": "Specialist",
+    "department_id": 1,
     "hire_date": "2026-05-19",
     "status": "active"
 }
@@ -164,6 +175,7 @@ Create a new employee. `tenant_id` and `company_id` are derived from the request
 - `employee_code` already in use within the current `(tenant, company)`.
 - `employee_code` exceeds 32 chars or is empty.
 - `email` is malformed.
+- `department_id` does not exist, OR belongs to a different `(tenant, company)`, OR points at a soft-deleted department.
 - `hire_date` is not a valid date.
 - `status` is not in the enum.
 
@@ -204,7 +216,7 @@ Soft-delete an employee. The row remains in the DB with `deleted_at` set; it dis
 
 ## Departments
 
-Flat organizational units within a company. No hierarchy in this slice — `parent_id`, closure tables, and an Employee↔Department FK link are explicitly deferred. Each department is a standalone record scoped to one `(tenant, company)` pair.
+Flat organizational units within a company. No hierarchy in this slice — `parent_id` and closure tables are explicitly deferred. Each department is a standalone record scoped to one `(tenant, company)` pair. Employees may be assigned to a department via the optional `department_id` FK on the Employee resource.
 
 ### Resource shape
 
@@ -218,11 +230,14 @@ The full Department shape returned by `show`, `store`, and `update`:
         "name": "Operations",
         "description": "Day-to-day operations team.",
         "status": "active",
+        "employees_count": 2,
         "created_at": "2026-05-20T10:00:00+00:00",
         "updated_at": "2026-05-20T10:00:00+00:00"
     }
 }
 ```
+
+`employees_count` is a derived field — the count of employees in the same `(tenant, company)` currently assigned to this department. Pre-computed via `withCount('employees')` on the show endpoint, so the response is one row fetch + one count subquery. The list (Brief) shape does NOT include this count.
 
 The list (`index`) response uses a compact shape — no `description`, no `created_at`/`updated_at`:
 
@@ -343,11 +358,11 @@ Audit rows are append-only at the DB level (immutability trigger). No HRM endpoi
 
 The following are **not** in the HRM module as shipped:
 
-- **Employee↔Department FK link** — Departments ships standalone in this slice; the FK is a planned follow-up. Employee.job_title remains plain text until the link lands.
 - Branches table, Positions table
-- Hierarchy / closure tables, department parents, manager relationships
+- Employee transfer history — no `previous_department_id`, no transfers table; changes to `department_id` are captured generically via `audit_logs` like any other field change
+- Department hierarchy / closure tables, department parents, manager relationships
 - Photo upload, address history, emergency contacts, salary
-- Bulk select / bulk delete
+- Bulk select / bulk delete, bulk department reassignment
 - Audit-log read endpoint
 - Per-company permission scoping (H1c) — `AuthorizesHrmAccess` chokepoint exists so H1c is a drop-in later
 - Approval workflow, leave, attendance, payroll

@@ -7,6 +7,7 @@ declare(strict_types=1);
 // Full §7.D 5-test pattern + cross-tenant + cross-company isolation.
 // ─────────────────────────────────────────────────────────────────────────────
 
+use App\Domain\HRM\Models\Department;
 use App\Domain\HRM\Models\Employee;
 use App\Models\Company;
 use App\Models\Tenant;
@@ -126,4 +127,53 @@ it('returns 404 cross-company — admin in company X cannot update an employee i
     $this->actingAs($this->admin)
         ->patchJson("/api/v1/hrm/employees/{$other->id}", ['job_title' => 'hijack'])
         ->assertStatus(404);
+});
+
+// ─── Department FK update scenarios ──────────────────────────────────────────
+
+it('PATCH department_id to a valid same-company department persists the FK', function (): void {
+    $department = Department::factory()
+        ->forCompany($this->company)
+        ->create();
+
+    $this->actingAs($this->admin);
+    $response = $this->patchJson("/api/v1/hrm/employees/{$this->employee->id}", [
+        'department_id' => $department->id,
+    ]);
+
+    $response->assertOk();
+    $response->assertJsonPath('data.department.id', $department->id);
+    expect($this->employee->fresh()->department_id)->toBe($department->id);
+});
+
+it('PATCH department_id to null clears the department', function (): void {
+    // First attach a department.
+    $department = Department::factory()
+        ->forCompany($this->company)
+        ->create();
+    $this->employee->forceFill(['department_id' => $department->id])->save();
+
+    $this->actingAs($this->admin);
+    $response = $this->patchJson("/api/v1/hrm/employees/{$this->employee->id}", [
+        'department_id' => null,
+    ]);
+
+    $response->assertOk();
+    $response->assertJsonPath('data.department', null);
+    expect($this->employee->fresh()->department_id)->toBeNull();
+});
+
+it('PATCH rejects 422 when department_id points at a foreign-company department', function (): void {
+    $otherCompany = Company::factory()->forTenant($this->tenant)->create();
+    $foreignDepartment = Department::factory()
+        ->forCompany($otherCompany)
+        ->create();
+
+    $this->actingAs($this->admin);
+    $this->patchJson("/api/v1/hrm/employees/{$this->employee->id}", [
+        'department_id' => $foreignDepartment->id,
+    ])->assertStatus(422)->assertJsonValidationErrors('department_id');
+
+    // Unchanged.
+    expect($this->employee->fresh()->department_id)->toBeNull();
 });
