@@ -79,6 +79,10 @@ final class DefaultRolesSeeder extends Seeder
                 'hrm.leave_request.update',
                 'hrm.leave_request.delete',
                 'hrm.leave_request.approve',
+                'hrm.attendance.view',
+                'hrm.attendance.create',
+                'hrm.attendance.update',
+                'hrm.attendance.delete',
             ],
             'accountant' => [
                 'accounting.journal_entry.view',
@@ -92,6 +96,7 @@ final class DefaultRolesSeeder extends Seeder
                 // delete, or decide. Read-only is the right grant level
                 // for an auditor or finance read-out persona.
                 'hrm.leave_request.view',
+                'hrm.attendance.view',
             ],
         ];
     }

@@ -6,6 +6,7 @@ use App\Web\API\V1\Controllers\Auth\LoginController;
 use App\Web\API\V1\Controllers\Auth\LogoutController;
 use App\Web\API\V1\Controllers\Auth\MeController;
 use App\Web\API\V1\Controllers\HRM\ApproveLeaveRequestController;
+use App\Web\API\V1\Controllers\HRM\AttendanceController;
 use App\Web\API\V1\Controllers\HRM\DepartmentController;
 use App\Web\API\V1\Controllers\HRM\EmployeeController;
 use App\Web\API\V1\Controllers\HRM\LeaveRequestController;
@@ -71,5 +72,12 @@ Route::middleware(['auth:sanctum', 'tenant', 'company'])->group(function (): voi
             ->name('hrm.leave-requests.approve');
         Route::post('leave-requests/{leaveRequest}/reject', RejectLeaveRequestController::class)
             ->name('hrm.leave-requests.reject');
+
+        // Attendance — plain CRUD, no workflow endpoints. Uniqueness
+        // on (employee_id, date) is enforced at the FormRequest layer
+        // (named-fields 422 message) and backstopped by the partial
+        // unique DB index.
+        Route::apiResource('attendance', AttendanceController::class)
+            ->parameters(['attendance' => 'attendance']);
     });
 });

@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 namespace Database\Seeders\Demo;
 
+use App\Domain\HRM\Enums\AttendanceStatus;
 use App\Domain\HRM\Enums\DepartmentStatus;
 use App\Domain\HRM\Enums\EmployeeStatus;
 use App\Domain\HRM\Enums\LeaveRequestStatus;
 use App\Domain\HRM\Enums\LeaveType;
+use App\Domain\HRM\Models\AttendanceRecord;
 use App\Domain\HRM\Models\Department;
 use App\Domain\HRM\Models\Employee;
 use App\Domain\HRM\Models\LeaveRequest;
@@ -369,6 +371,53 @@ final class DemoUsersSeeder extends Seeder
             );
         }
 
+        // ─── Demo attendance_records (10 rows: mix of statuses) ─────────────
+        // Two weeks of attendance for two demo employees (Sokha + Rithy)
+        // so the list page has a date range to scroll, the status filter
+        // has rows in every bucket, and the detail page has examples of
+        // each enum value to inspect. Idempotent on (employee, date) via
+        // firstOrCreate.
+        //
+        // The demo data deliberately includes ONE on_leave row and ONE
+        // half_day row even though the Leave Requests coupling is
+        // deferred (slice plan option a) — admins record those labels
+        // manually today, the Leave Balances slice introduces derivation.
+        $demoAttendanceRows = [
+            // Sokha — full present week then varied
+            ['emp_code' => 'E-1001', 'date' => '2026-05-12', 'in' => '09:00:00', 'out' => '18:00:00', 'status' => AttendanceStatus::Present,  'notes' => null],
+            ['emp_code' => 'E-1001', 'date' => '2026-05-13', 'in' => '09:00:00', 'out' => '18:00:00', 'status' => AttendanceStatus::Present,  'notes' => null],
+            ['emp_code' => 'E-1001', 'date' => '2026-05-14', 'in' => '09:45:00', 'out' => '18:00:00', 'status' => AttendanceStatus::Late,     'notes' => 'Train delay.'],
+            ['emp_code' => 'E-1001', 'date' => '2026-05-15', 'in' => '09:00:00', 'out' => '13:00:00', 'status' => AttendanceStatus::HalfDay,  'notes' => 'Afternoon off — personal.'],
+            ['emp_code' => 'E-1001', 'date' => '2026-05-18', 'in' => null,       'out' => null,       'status' => AttendanceStatus::OnLeave,  'notes' => 'Annual leave (no leave_request linked — manual entry).'],
+            // Rithy — mix
+            ['emp_code' => 'E-1002', 'date' => '2026-05-12', 'in' => '09:00:00', 'out' => '18:00:00', 'status' => AttendanceStatus::Present,  'notes' => null],
+            ['emp_code' => 'E-1002', 'date' => '2026-05-13', 'in' => null,       'out' => null,       'status' => AttendanceStatus::Absent,   'notes' => 'No-show; flagged for follow-up.'],
+            ['emp_code' => 'E-1002', 'date' => '2026-05-14', 'in' => '09:00:00', 'out' => '18:00:00', 'status' => AttendanceStatus::Present,  'notes' => null],
+            ['emp_code' => 'E-1002', 'date' => '2026-05-15', 'in' => '09:00:00', 'out' => '18:00:00', 'status' => AttendanceStatus::Present,  'notes' => null],
+            ['emp_code' => 'E-1002', 'date' => '2026-05-18', 'in' => '09:00:00', 'out' => '18:00:00', 'status' => AttendanceStatus::Present,  'notes' => null],
+        ];
+
+        foreach ($demoAttendanceRows as $row) {
+            $employee = $employeesByCode[$row['emp_code']] ?? null;
+            if ($employee === null) {
+                continue;
+            }
+            AttendanceRecord::query()->firstOrCreate(
+                [
+                    'tenant_id' => $acmeTenant->id,
+                    'company_id' => $acmeCompany->id,
+                    'employee_id' => $employee->id,
+                    'date' => $row['date'],
+                ],
+                [
+                    'clock_in' => $row['in'],
+                    'clock_out' => $row['out'],
+                    'status' => $row['status'],
+                    'notes' => $row['notes'],
+                ],
+            );
+        }
+
         // Clear CompanyContext before moving on to the suspended-tenant block,
         // which has its own company context concerns handled inside asSystem.
         app(CompanyContext::class)->setCurrent(null);
@@ -429,7 +478,7 @@ final class DemoUsersSeeder extends Seeder
         unset($suspendedUser);
 
         $this->command->info(
-            'DemoUsersSeeder: seeded admin@acme.test + manager@acme.test (Acme Trading Co., active) + suspended@acme.test (Suspended Co., suspended). 5 demo leave_requests seeded (2 pending, 2 approved, 1 rejected — decided rows attributed to Manager User).'
+            'DemoUsersSeeder: seeded admin@acme.test + manager@acme.test (Acme Trading Co., active) + suspended@acme.test (Suspended Co., suspended). 5 demo leave_requests + 10 demo attendance_records seeded (covering every status enum value).'
         );
     }
 }

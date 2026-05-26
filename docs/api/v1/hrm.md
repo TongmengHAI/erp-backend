@@ -40,6 +40,10 @@ Every endpoint is gated by a Spatie permission (the `{domain}.{resource}.{action
 | `hrm.leave_request.update` | `tenant_admin` |
 | `hrm.leave_request.delete` | `tenant_admin` |
 | `hrm.leave_request.approve` | `tenant_admin` |
+| `hrm.attendance.view` | `tenant_admin`, `viewer` |
+| `hrm.attendance.create` | `tenant_admin` |
+| `hrm.attendance.update` | `tenant_admin` |
+| `hrm.attendance.delete` | `tenant_admin` |
 
 `hrm.leave_request.approve` represents **decision-making authority** — it gates both the `/approve` and `/reject` endpoints. A manager who can decide on requests has decision authority, not "approval-only authority." This means a future "team_lead" role can be granted `.view + .approve` (decide on requests, no CRUD), and a future "employee" role can be granted `.view + .create + .update + .delete` (manage their own requests, no decisions) — without needing to split the permission later in a way that breaks existing role assignments.
 
@@ -606,6 +610,149 @@ Mirror of `/approve`. Transition a pending request to `rejected`. Same request b
 
 ---
 
+## Attendance
+
+An attendance record describes what happened for one employee on one date — present, absent, late, on leave, or half-day — with optional clock-in / clock-out times and notes. Unlike Leave Requests, attendance is **admin-entered**: managers record what they observed. No clock-in button, no biometric integration, no calculations on top (no "hours worked" or "late by N minutes" derivations).
+
+### Relationship to Leave Requests
+
+`status = "on_leave"` is **a manual label, not a derivation**. An attendance record with `status="on_leave"` can exist regardless of whether the employee has an approved leave request for that date, and an approved leave request can exist regardless of whether the corresponding attendance record was created. This deliberate decoupling defers the integration to the Leave Balances slice (HRM v1 path slice 4), which has to read Leave Requests anyway for the deduction math — that's the natural slice to introduce the cross-module dependency.
+
+For this slice: the admin records what happened on the day. If the employee was on leave with an approved request, the admin records `status="on_leave"`. If they took unpaid leave without filing a request, same status. The data model accepts both.
+
+### Uniqueness — one record per employee per date
+
+A composite **partial unique index** `(tenant_id, company_id, employee_id, date) WHERE deleted_at IS NULL` enforces that an employee has at most one non-deleted attendance record per date. Soft-deleted rows don't block re-creation (typical "deleted a wrong entry, want to re-create" workflow).
+
+When a POST violates this constraint, the response is **422** with the error attached to the `date` field (date is the more likely typo — managers pick the employee first, then the date), and the message names both fields:
+
+```json
+{
+    "message": "...",
+    "errors": {
+        "date": ["Attendance for Sokha Chan on 2026-05-15 already exists."]
+    }
+}
+```
+
+PATCH is naturally idempotent on the (employee, date) pair — the conflict check ignores the row being updated. Changing `employee_id` or `date` on a PATCH re-runs the uniqueness check against effective post-patch values; if the new combination collides with another row, same 422 shape.
+
+The composite partial unique index is the DB backstop. If a future refactor somehow bypassed the FormRequest, the DB would surface a 500 — not graceful but not corrupt either.
+
+### Full resource shape
+
+```json
+{
+    "data": {
+        "id": 17,
+        "employee": {
+            "id": 42,
+            "employee_code": "E-1001",
+            "full_name": "Sokha Chan"
+        },
+        "date": "2026-05-14",
+        "clock_in": "09:45:00",
+        "clock_out": "18:00:00",
+        "status": "late",
+        "notes": "Train delay.",
+        "created_at": "2026-05-14T18:30:00+00:00",
+        "updated_at": "2026-05-14T18:30:00+00:00"
+    }
+}
+```
+
+`employee` may be `null` if the parent employee row was soft-deleted (rare but real — the attendance history survives the employee's archive).
+
+`clock_in` / `clock_out` are `HH:MM:SS` strings matching the Postgres TIME column wire format. Both are nullable — `absent` and `on_leave` rows typically have neither; `half_day` may have one. No DB-level cross-rule between `status` and the clock columns at this slice (loose by design — admins occasionally need to override conventional patterns).
+
+### List shape
+
+```json
+{
+    "data": [
+        {
+            "id": 17,
+            "employee_id": 42,
+            "employee_name": "Sokha Chan",
+            "employee_code": "E-1001",
+            "date": "2026-05-14",
+            "clock_in": "09:45:00",
+            "clock_out": "18:00:00",
+            "status": "late"
+        }
+    ],
+    "meta": { "current_page": 1, "per_page": 25, "total": 17 }
+}
+```
+
+Default sort: `date DESC, id DESC` — newest records surface first (manager's "what happened recently" view). Drops `notes`, `created_at`, `updated_at` for payload efficiency.
+
+### Enum values
+
+- `status`: `present`, `absent`, `late`, `on_leave`, `half_day`
+
+### Endpoint: GET /api/v1/hrm/attendance
+
+**Permission**: `hrm.attendance.view`
+
+**Query parameters** (all optional):
+
+| Param | Type | Notes |
+| --- | --- | --- |
+| `employee_id` | int | Scope to a single employee. |
+| `status` | string | One of the status enum values. |
+| `from` | date (YYYY-MM-DD) | Lower bound — records with `date >= from`. |
+| `to` | date (YYYY-MM-DD) | Upper bound — records with `date <= to`. |
+| `per_page` | int (1–100) | Defaults to 25. |
+
+### Endpoint: GET /api/v1/hrm/attendance/{attendance}
+
+**Permission**: `hrm.attendance.view`
+
+Returns the full shape. Cross-tenant / cross-company / soft-deleted ids return **404**.
+
+### Endpoint: POST /api/v1/hrm/attendance
+
+**Permission**: `hrm.attendance.create`
+
+**Request body** example:
+
+```json
+{
+    "employee_id": 42,
+    "date": "2026-05-14",
+    "clock_in": "09:45:00",
+    "clock_out": "18:00:00",
+    "status": "late",
+    "notes": "Train delay."
+}
+```
+
+**Returns**: **201 Created** with the full shape.
+
+**Validation errors (422):**
+- `employee_id` is missing, not an integer, or does not point at a same-tenant + same-company + non-soft-deleted employee (load-bearing isolation guard).
+- `date` is missing or not a valid date.
+- `date` — uniqueness conflict: `"Attendance for {employee name} on {date} already exists."` (the named-fields message — see Uniqueness subsection).
+- `clock_in` / `clock_out` not matching `HH:MM:SS` format.
+- `clock_out` — clock-order violation: `"Clock out must be on or after clock in."` when both are set and end precedes start.
+- `status` is missing or not in the enum.
+- `notes` exceeds 500 characters.
+
+### Endpoint: PATCH /api/v1/hrm/attendance/{attendance}
+
+**Permission**: `hrm.attendance.update`
+
+Partial update. All field constraints from `store` apply (`sometimes` rule lets fields be omitted). The uniqueness re-check ignores the row being updated; the clock-order check uses effective post-patch values (input fallback to the existing row).
+
+### Endpoint: DELETE /api/v1/hrm/attendance/{attendance}
+
+**Permission**: `hrm.attendance.delete`
+
+Soft-delete. Returns **204 No Content**. A subsequent re-create for the same `(employee, date)` works because the partial unique index excludes soft-deleted rows.
+
+---
+
 ## Audit
 
 Every create / update / delete writes an entry to `audit_logs` with:
@@ -631,7 +778,9 @@ The following are **not** in the HRM module as shipped:
 - Bulk select / bulk delete, bulk department reassignment
 - Audit-log read endpoint
 - Per-company permission scoping (H1c) — `AuthorizesHrmAccess` chokepoint exists so H1c is a drop-in later
-- Attendance, payroll
+- Payroll (Attendance ships now — see Attendance section above)
+- Attendance-related: bulk CSV import, device/biometric integration, automatic clock-in/out buttons, "hours worked" / "late by N minutes" calculations, calendar view, reports
+- Coupling between Attendance and Leave Requests (deferred to the Leave Balances slice)
 - A generalized approval workflow primitive (the `app/Support/Workflow/` module). The leave-request state machine is currently bespoke to the resource; if/when a second approval flow lands (e.g. accounting journal entries, purchase requisitions) the shared workflow primitive is the right factoring point. Until then, premature.
 - Re-open transitions for decided leave requests (delete + re-submit covers the current need)
 - Calendar / cross-team overlap views, leave balances, accruals, hourly requests (the half-day case IS supported — see the Day-part subsection)

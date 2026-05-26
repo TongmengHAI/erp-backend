@@ -95,6 +95,15 @@ final class DefaultPermissionsSeeder extends Seeder
             'hrm.leave_request.update',
             'hrm.leave_request.delete',
             'hrm.leave_request.approve',
+            // hrm.attendance — straight 4-perm CRUD. No transition or
+            // decision-authority split (attendance is admin-entered
+            // records, not a workflow). Same default-role mapping as
+            // Employee/Department: tenant_admin gets all four, viewer
+            // gets .view only.
+            'hrm.attendance.view',
+            'hrm.attendance.create',
+            'hrm.attendance.update',
+            'hrm.attendance.delete',
         ];
     }
 }
