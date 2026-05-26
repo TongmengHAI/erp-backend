@@ -18,6 +18,15 @@ class AttendanceRecordFactory extends Factory
 {
     protected $model = AttendanceRecord::class;
 
+    /**
+     * Process-wide counter used by forEmployee() to stagger generated
+     * `date` values. Each invocation steps the counter one day back —
+     * eliminating the unique-index collisions that the prior random-
+     * date-in-30-day-window default produced when tests called
+     * forEmployee()->create() multiple times for the same employee.
+     */
+    private static int $dateCounter = 0;
+
     /** @return array<string, mixed> */
     public function definition(): array
     {
@@ -40,14 +49,27 @@ class AttendanceRecordFactory extends Factory
      * Anchor this record to an existing employee (and their tenant +
      * company). Required when seeding multiple records for a known
      * employee, or in tests that need a specific FK.
+     *
+     * Date staggering: each call walks the process-wide $dateCounter
+     * back one more day. This keeps every generated `date` distinct
+     * across the test process, so tests that call forEmployee() many
+     * times for the same employee cannot collide on the (tenant_id,
+     * company_id, employee_id, date) unique index. Callers can still
+     * override `date` via ->create(['date' => ...]); create-args win
+     * over state.
      */
     public function forEmployee(Employee $employee): static
     {
-        return $this->state(fn (): array => [
-            'tenant_id' => $employee->tenant_id,
-            'company_id' => $employee->company_id,
-            'employee_id' => $employee->id,
-        ]);
+        return $this->state(function () use ($employee): array {
+            self::$dateCounter++;
+
+            return [
+                'tenant_id' => $employee->tenant_id,
+                'company_id' => $employee->company_id,
+                'employee_id' => $employee->id,
+                'date' => now()->subDays(self::$dateCounter)->format('Y-m-d'),
+            ];
+        });
     }
 
     /**
