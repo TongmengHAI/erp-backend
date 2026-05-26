@@ -111,6 +111,13 @@ final class DefaultPermissionsSeeder extends Seeder
             'hrm.position.create',
             'hrm.position.update',
             'hrm.position.delete',
+            // hrm.branch — straight 4-perm CRUD. Same default-role
+            // mapping as Department/Position: tenant_admin gets all
+            // four, viewer gets .view only.
+            'hrm.branch.view',
+            'hrm.branch.create',
+            'hrm.branch.update',
+            'hrm.branch.delete',
         ];
     }
 }

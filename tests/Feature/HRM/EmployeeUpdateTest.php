@@ -7,6 +7,7 @@ declare(strict_types=1);
 // Full §7.D 5-test pattern + cross-tenant + cross-company isolation.
 // ─────────────────────────────────────────────────────────────────────────────
 
+use App\Domain\HRM\Models\Branch;
 use App\Domain\HRM\Models\Department;
 use App\Domain\HRM\Models\Employee;
 use App\Domain\HRM\Models\Position;
@@ -227,4 +228,23 @@ it('LOAD-BEARING: PATCH rejects 422 when position_id points at a foreign-company
     ])->assertStatus(422)->assertJsonValidationErrors('position_id');
 
     expect($this->employee->fresh()->position_id)->toBeNull();
+});
+
+// ─── Branch FK update scenario (one focused scoped-FK guard) ─────────────────
+
+it('LOAD-BEARING: PATCH rejects 422 when branch_id points at a foreign-company branch', function (): void {
+    // Mechanical mirror of the department_id / position_id scoped-FK
+    // tests above. Same Rule::exists where() shape, same isolation
+    // guarantee — one focused test, not a full 5-test surface.
+    $otherCompany = Company::factory()->forTenant($this->tenant)->create();
+    $foreignBranch = Branch::factory()
+        ->forCompany($otherCompany)
+        ->create();
+
+    $this->actingAs($this->admin);
+    $this->patchJson("/api/v1/hrm/employees/{$this->employee->id}", [
+        'branch_id' => $foreignBranch->id,
+    ])->assertStatus(422)->assertJsonValidationErrors('branch_id');
+
+    expect($this->employee->fresh()->branch_id)->toBeNull();
 });

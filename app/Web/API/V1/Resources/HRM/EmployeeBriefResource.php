@@ -35,6 +35,12 @@ class EmployeeBriefResource extends JsonResource
             // department_name; eager-loaded via with('position') in the
             // controller to avoid N+1.
             'position_title' => $this->position?->title,
+            // branch_name — flat, mirror of department_name / position_title.
+            // city / country_code are deliberately NOT included here — they
+            // live on the FULL EmployeeResource only (detail page reads
+            // them; the list row stays compact). Eager-loaded via
+            // with('branch') in the controller.
+            'branch_name' => $this->branch?->name,
             'hire_date' => $this->hire_date->toDateString(),
             'status' => $this->status->value,
         ];

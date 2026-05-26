@@ -87,6 +87,10 @@ final class DefaultRolesSeeder extends Seeder
                 'hrm.position.create',
                 'hrm.position.update',
                 'hrm.position.delete',
+                'hrm.branch.view',
+                'hrm.branch.create',
+                'hrm.branch.update',
+                'hrm.branch.delete',
             ],
             'accountant' => [
                 'accounting.journal_entry.view',
@@ -102,6 +106,7 @@ final class DefaultRolesSeeder extends Seeder
                 'hrm.leave_request.view',
                 'hrm.attendance.view',
                 'hrm.position.view',
+                'hrm.branch.view',
             ],
         ];
     }

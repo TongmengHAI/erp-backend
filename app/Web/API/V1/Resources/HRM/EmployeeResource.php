@@ -52,6 +52,23 @@ class EmployeeResource extends JsonResource
                     'title' => $this->position->title,
                 ]
                 : null,
+            // Nested branch snapshot. Slightly WIDER than department /
+            // position (includes city + country_code) — deliberate, per
+            // the Branches slice design call: location is the at-a-
+            // glance differentiator for a branch, and the detail page
+            // renders "Phnom Penh HQ — Phnom Penh, KH" without a
+            // second fetch. The brief shape (list) still carries only
+            // `branch_name` flat — city/country don't bleed into every
+            // list row.
+            'branch' => $this->branch
+                ? [
+                    'id' => $this->branch->id,
+                    'code' => $this->branch->code,
+                    'name' => $this->branch->name,
+                    'city' => $this->branch->city,
+                    'country_code' => $this->branch->country_code,
+                ]
+                : null,
             'hire_date' => $this->hire_date->toDateString(),
             'status' => $this->status->value,
             'created_at' => $this->created_at->toIso8601String(),

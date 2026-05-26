@@ -7,6 +7,7 @@ use App\Web\API\V1\Controllers\Auth\LogoutController;
 use App\Web\API\V1\Controllers\Auth\MeController;
 use App\Web\API\V1\Controllers\HRM\ApproveLeaveRequestController;
 use App\Web\API\V1\Controllers\HRM\AttendanceController;
+use App\Web\API\V1\Controllers\HRM\BranchController;
 use App\Web\API\V1\Controllers\HRM\DepartmentController;
 use App\Web\API\V1\Controllers\HRM\EmployeeController;
 use App\Web\API\V1\Controllers\HRM\LeaveRequestController;
@@ -86,5 +87,12 @@ Route::middleware(['auth:sanctum', 'tenant', 'company'])->group(function (): voi
         // hrm.md "Positions" section for the migration discipline.
         Route::apiResource('positions', PositionController::class)
             ->parameters(['positions' => 'position']);
+
+        // Branches — physical-location entities. Same shape as
+        // Department/Position; cross-module FK to Employee follows
+        // the established pattern (nullable + ON DELETE SET NULL +
+        // scoped-exists guard on the FormRequest).
+        Route::apiResource('branches', BranchController::class)
+            ->parameters(['branches' => 'branch']);
     });
 });

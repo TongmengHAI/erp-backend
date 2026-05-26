@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Database\Factories\HRM;
 
 use App\Domain\HRM\Enums\EmployeeStatus;
+use App\Domain\HRM\Models\Branch;
 use App\Domain\HRM\Models\Employee;
 use App\Domain\HRM\Models\Position;
 use App\Models\Company;
@@ -57,6 +58,17 @@ class EmployeeFactory extends Factory
     {
         return $this->state(fn (): array => [
             'position_id' => $position->id,
+        ]);
+    }
+
+    /**
+     * Anchor this employee to an existing Branch. Same caller-aligns-
+     * (tenant, company) discipline as forPosition / forDepartment.
+     */
+    public function forBranch(Branch $branch): static
+    {
+        return $this->state(fn (): array => [
+            'branch_id' => $branch->id,
         ]);
     }
 

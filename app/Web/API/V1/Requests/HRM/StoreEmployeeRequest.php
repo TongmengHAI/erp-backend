@@ -71,6 +71,17 @@ class StoreEmployeeRequest extends FormRequest
                         ->where('company_id', $companyId)
                         ->whereNull('deleted_at')),
             ],
+            // Branch FK — same scoped-exists pattern again. Third
+            // cross-module FK on Employee; the shape is mechanical.
+            'branch_id' => [
+                'nullable',
+                'integer',
+                Rule::exists('branches', 'id')
+                    ->where(fn ($q) => $q
+                        ->where('tenant_id', $tenantId)
+                        ->where('company_id', $companyId)
+                        ->whereNull('deleted_at')),
+            ],
             'hire_date' => ['required', 'date'],
             'status' => ['required', 'string', Rule::in(array_column(EmployeeStatus::cases(), 'value'))],
         ];

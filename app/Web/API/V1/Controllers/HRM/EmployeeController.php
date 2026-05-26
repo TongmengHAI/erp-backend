@@ -43,21 +43,25 @@ class EmployeeController extends Controller
             'search' => ['sometimes', 'nullable', 'string', 'max:255'],
             'status' => ['sometimes', 'nullable', 'string',
                 Rule::in(array_column(EmployeeStatus::cases(), 'value'))],
-            // Per-department / per-position filters. Cross-tenant ids return
-            // empty results (the Employee scope simply won't match) rather
-            // than a 422 — that's correct: the param is just a where clause,
-            // not a resource lookup. The load-bearing isolation lives in the
-            // form-request side of each FK.
+            // Per-department / per-position / per-branch filters.
+            // Cross-tenant ids return empty results (the Employee scope
+            // simply won't match) rather than a 422 — that's correct:
+            // the param is just a where clause, not a resource lookup.
+            // The load-bearing isolation lives in the form-request side
+            // of each FK.
             'department_id' => ['sometimes', 'nullable', 'integer'],
             'position_id' => ['sometimes', 'nullable', 'integer'],
+            'branch_id' => ['sometimes', 'nullable', 'integer'],
             'per_page' => ['sometimes', 'integer', 'min:1', 'max:100'],
         ]);
 
-        // Eager-load department + position so EmployeeBriefResource's
-        // `department_name` + `position_title` accessors are single
-        // attribute reads, not per-row queries (N+1 protection on a
-        // paginated list endpoint).
-        $query = Employee::query()->with(['department', 'position'])->orderBy('full_name');
+        // Eager-load department + position + branch so the
+        // EmployeeBriefResource's flat accessors (department_name,
+        // position_title, branch_name) are single attribute reads, not
+        // per-row queries (N+1 protection on a paginated list endpoint).
+        $query = Employee::query()
+            ->with(['department', 'position', 'branch'])
+            ->orderBy('full_name');
 
         if (! empty($validated['search'])) {
             $needle = '%'.$validated['search'].'%';
@@ -89,6 +93,12 @@ class EmployeeController extends Controller
             $query->where('position_id', $validated['position_id']);
         }
 
+        // Per-branch filter — mirror of department_id / position_id.
+        if (array_key_exists('branch_id', $validated)
+            && $validated['branch_id'] !== null) {
+            $query->where('branch_id', $validated['branch_id']);
+        }
+
         $perPage = (int) ($validated['per_page'] ?? 25);
 
         return EmployeeBriefResource::collection($query->paginate($perPage));
@@ -103,7 +113,7 @@ class EmployeeController extends Controller
         // user has structural access; we still gate the permission above.
         // Eager-load department + position for the resource projection —
         // two single reads rather than two relation triggers inside toArray.
-        $employee->load(['department', 'position']);
+        $employee->load(['department', 'position', 'branch']);
 
         return new EmployeeResource($employee);
     }
@@ -112,13 +122,13 @@ class EmployeeController extends Controller
     {
         $this->authorizeHrm($request, 'hrm.employee.create');
 
-        /** @var array{employee_code: string, full_name: string, email?: string|null, department_id?: int|null, position_id?: int|null, hire_date: string, status: string} $data */
+        /** @var array{employee_code: string, full_name: string, email?: string|null, department_id?: int|null, position_id?: int|null, branch_id?: int|null, hire_date: string, status: string} $data */
         $data = $request->validated();
         $employee = $action->execute($data);
         // Load department + position for the response so the SPA can show
         // them on the detail page it redirects to. The action refresh()
         // reloaded the attributes; this loads the relations.
-        $employee->load(['department', 'position']);
+        $employee->load(['department', 'position', 'branch']);
 
         return (new EmployeeResource($employee))
             ->response()
@@ -129,10 +139,10 @@ class EmployeeController extends Controller
     {
         $this->authorizeHrm($request, 'hrm.employee.update');
 
-        /** @var array{employee_code?: string, full_name?: string, email?: string|null, department_id?: int|null, position_id?: int|null, hire_date?: string, status?: string} $data */
+        /** @var array{employee_code?: string, full_name?: string, email?: string|null, department_id?: int|null, position_id?: int|null, branch_id?: int|null, hire_date?: string, status?: string} $data */
         $data = $request->validated();
         $employee = $action->execute($employee, $data);
-        $employee->load(['department', 'position']);
+        $employee->load(['department', 'position', 'branch']);
 
         return new EmployeeResource($employee);
     }

@@ -5,12 +5,14 @@ declare(strict_types=1);
 namespace Database\Seeders\Demo;
 
 use App\Domain\HRM\Enums\AttendanceStatus;
+use App\Domain\HRM\Enums\BranchStatus;
 use App\Domain\HRM\Enums\DepartmentStatus;
 use App\Domain\HRM\Enums\EmployeeStatus;
 use App\Domain\HRM\Enums\LeaveRequestStatus;
 use App\Domain\HRM\Enums\LeaveType;
 use App\Domain\HRM\Enums\PositionStatus;
 use App\Domain\HRM\Models\AttendanceRecord;
+use App\Domain\HRM\Models\Branch;
 use App\Domain\HRM\Models\Department;
 use App\Domain\HRM\Models\Employee;
 use App\Domain\HRM\Models\LeaveRequest;
@@ -44,9 +46,15 @@ use Illuminate\Support\Facades\Hash;
  *           │                 free-text job_title field)
  *           ├── 4 departments (3 active: Operations, Finance, Sales;
  *           │                  1 archived: Warehouse)
- *           └── 5 of 6 employees assigned to departments (Operations × 2,
- *               Finance × 2, Sales × 1; Vichea on leave is unattached
- *               to exercise the nullable-department state)
+ *           ├── 5 of 6 employees assigned to departments (Operations × 2,
+ *           │   Finance × 2, Sales × 1; Vichea on leave is unattached
+ *           │   to exercise the nullable-department state)
+ *           ├── 4 branches (3 active: Phnom Penh HQ, Phnom Penh
+ *           │                Warehouse, Sihanoukville Office; 1 archived:
+ *           │                Legacy Retail). country_code='KH' uppercase
+ *           │                consistently — matches the FormRequest regex.
+ *           └── 5 of 6 employees assigned to branches (HQ × 3, Warehouse
+ *               × 1, Sihanoukville × 1; Vichea on leave is unattached)
  *
  *   Tenant: Suspended Co. (status=suspended)
  *     └── Company: Suspended Co. (active — the suspension is the tenant's)
@@ -274,6 +282,114 @@ final class DemoUsersSeeder extends Seeder
             }
             $employee->forceFill([
                 'department_id' => $deptCode !== null ? $departmentByCode[$deptCode] ?? null : null,
+            ])->save();
+        }
+
+        // ─── Demo branches in Acme Trading Co. ────────────────────────────────
+        // Four branches — three active in Cambodia (Phnom Penh HQ, Phnom
+        // Penh Warehouse, Sihanoukville Office) + one archived (Legacy
+        // Retail). country_code is 'KH' uppercase consistently —
+        // matches the StoreBranchRequest's ^[A-Z]{2}$ regex. The seeder
+        // is the only ingestion path that bypasses the FormRequest
+        // (Eloquent fillable + forceFill skip validation), so this
+        // consistency is load-bearing for the v1 invariant that all
+        // country_code values are valid ISO 3166-1 alpha-2.
+        $demoBranches = [
+            [
+                'code' => 'B-PNH-HQ',
+                'name' => 'Phnom Penh HQ',
+                'description' => 'Main headquarters and executive offices.',
+                'address' => 'Building 5, Street 240, Sangkat Boeung Raing, Khan Daun Penh',
+                'city' => 'Phnom Penh',
+                'country_code' => 'KH',
+                'phone' => '+855 23 123 456',
+                'status' => BranchStatus::Active,
+            ],
+            [
+                'code' => 'B-PNH-WHSE',
+                'name' => 'Phnom Penh Warehouse',
+                'description' => 'Distribution warehouse in north Phnom Penh.',
+                'address' => 'National Road 5, Russey Keo',
+                'city' => 'Phnom Penh',
+                'country_code' => 'KH',
+                'phone' => '+855 23 987 654',
+                'status' => BranchStatus::Active,
+            ],
+            [
+                'code' => 'B-SHV-OFF',
+                'name' => 'Sihanoukville Office',
+                'description' => 'Regional sales office serving the south coast.',
+                'address' => 'Street 219, Sangkat 4',
+                'city' => 'Sihanoukville',
+                'country_code' => 'KH',
+                'phone' => '+855 34 555 1234',
+                'status' => BranchStatus::Active,
+            ],
+            [
+                'code' => 'B-OLD-RETAIL',
+                'name' => 'Legacy Retail (Retired)',
+                'description' => 'Closed retail front retained for historical attribution.',
+                'address' => null,
+                'city' => null,
+                'country_code' => null,
+                'phone' => null,
+                'status' => BranchStatus::Archived,
+            ],
+        ];
+
+        foreach ($demoBranches as $row) {
+            Branch::query()->firstOrCreate(
+                ['tenant_id' => $acmeTenant->id, 'company_id' => $acmeCompany->id, 'code' => $row['code']],
+                [
+                    'name' => $row['name'],
+                    'description' => $row['description'],
+                    'address' => $row['address'],
+                    'city' => $row['city'],
+                    'country_code' => $row['country_code'],
+                    'phone' => $row['phone'],
+                    'status' => $row['status'],
+                ],
+            );
+        }
+
+        // ─── Backfill: assign demo employees to demo branches ─────────────────
+        // Realistic spread per the plan: 4 → HQ (most employees work from
+        // HQ), 1 → SHV-OFF (Bopha — sales, naturally at a branch office),
+        // 1 → null (Vichea on leave — exercises the unassigned state),
+        // 1 → PNH-WHSE (Dara — terminated finance role that supported
+        // warehouse operations).
+        //
+        //   PNH-HQ:     Sokha + Rithy + Channary + Bopha (wait, Bopha is SHV-OFF)
+        //   PNH-HQ:     Sokha + Rithy + Channary                  → count=3
+        //   PNH-WHSE:   Dara                                       → count=1
+        //   SHV-OFF:    Bopha                                      → count=1
+        //   Archived:   —                                          → count=0
+        //   Vichea (on leave): branch_id=null
+        $branchByCode = Branch::query()
+            ->where('tenant_id', $acmeTenant->id)
+            ->where('company_id', $acmeCompany->id)
+            ->pluck('id', 'code');
+
+        $branchAssignments = [
+            'E-1001' => 'B-PNH-HQ',     // Sokha — Operations Manager (HQ)
+            'E-1002' => 'B-PNH-HQ',     // Rithy — Senior Accountant (HQ)
+            'E-1003' => 'B-SHV-OFF',    // Bopha — Sales Lead (regional office)
+            'E-1004' => null,           // Vichea — on leave, unassigned
+            'E-1005' => 'B-PNH-HQ',     // Channary — HR Coordinator (HQ)
+            'E-1006' => 'B-PNH-WHSE',   // Dara — Junior Accountant (warehouse finance)
+        ];
+
+        foreach ($branchAssignments as $empCode => $branchCode) {
+            $employee = Employee::query()
+                ->where('tenant_id', $acmeTenant->id)
+                ->where('company_id', $acmeCompany->id)
+                ->where('employee_code', $empCode)
+                ->first();
+            if ($employee === null) {
+                continue;
+            }
+            $employee->forceFill([
+                'branch_id' => $branchCode !== null ? $branchByCode[$branchCode] ?? null : null,
             ])->save();
         }
 
@@ -517,7 +633,7 @@ final class DemoUsersSeeder extends Seeder
         unset($suspendedUser);
 
         $this->command->info(
-            'DemoUsersSeeder: seeded admin@acme.test + manager@acme.test (Acme Trading Co., active) + suspended@acme.test (Suspended Co., suspended). 7 demo positions + 6 demo employees linked by position_id + 5 demo leave_requests + 10 demo attendance_records (covering every status enum value).'
+            'DemoUsersSeeder: seeded admin@acme.test + manager@acme.test (Acme Trading Co., active) + suspended@acme.test (Suspended Co., suspended). 7 demo positions + 4 demo branches + 6 demo employees linked by department/position/branch_id + 5 demo leave_requests + 10 demo attendance_records.'
         );
     }
 }

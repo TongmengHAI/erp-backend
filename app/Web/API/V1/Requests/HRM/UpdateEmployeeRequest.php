@@ -69,6 +69,17 @@ class UpdateEmployeeRequest extends FormRequest
                         ->where('company_id', $companyId)
                         ->whereNull('deleted_at')),
             ],
+            // Branch FK — same shape. Third cross-module FK; mechanical.
+            'branch_id' => [
+                'sometimes',
+                'nullable',
+                'integer',
+                Rule::exists('branches', 'id')
+                    ->where(fn ($q) => $q
+                        ->where('tenant_id', $tenantId)
+                        ->where('company_id', $companyId)
+                        ->whereNull('deleted_at')),
+            ],
             'hire_date' => ['sometimes', 'required', 'date'],
             'status' => ['sometimes', 'required', 'string', Rule::in(array_column(EmployeeStatus::cases(), 'value'))],
         ];

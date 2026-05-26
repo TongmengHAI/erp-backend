@@ -24,6 +24,7 @@ use Illuminate\Support\Carbon;
  * @property string|null $email
  * @property int|null $department_id
  * @property int|null $position_id
+ * @property int|null $branch_id
  * @property Carbon $hire_date
  * @property EmployeeStatus $status
  * @property Carbon $created_at
@@ -31,6 +32,7 @@ use Illuminate\Support\Carbon;
  * @property Carbon|null $deleted_at
  * @property Department|null $department
  * @property Position|null $position
+ * @property Branch|null $branch
  */
 class Employee extends Model
 {
@@ -51,6 +53,7 @@ class Employee extends Model
         'email',
         'department_id',
         'position_id',
+        'branch_id',
         'hire_date',
         'status',
     ];
@@ -87,6 +90,20 @@ class Employee extends Model
     public function position(): BelongsTo
     {
         return $this->belongsTo(Position::class);
+    }
+
+    /**
+     * The employee's current branch (physical location) within the same
+     * (tenant, company). Nullable for the standard reasons: remote
+     * workers, executives, or any employee not tied to a specific
+     * location. Same belongsTo + SoftDeletes shape as department / position
+     * — a soft-deleted branch returns null here and the UI displays "—".
+     *
+     * @return BelongsTo<Branch, $this>
+     */
+    public function branch(): BelongsTo
+    {
+        return $this->belongsTo(Branch::class);
     }
 
     protected static function newFactory(): EmployeeFactory

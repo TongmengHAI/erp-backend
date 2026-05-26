@@ -44,6 +44,10 @@ Every endpoint is gated by a Spatie permission (the `{domain}.{resource}.{action
 | `hrm.attendance.create` | `tenant_admin` |
 | `hrm.attendance.update` | `tenant_admin` |
 | `hrm.attendance.delete` | `tenant_admin` |
+| `hrm.branch.view` | `tenant_admin`, `viewer` |
+| `hrm.branch.create` | `tenant_admin` |
+| `hrm.branch.update` | `tenant_admin` |
+| `hrm.branch.delete` | `tenant_admin` |
 | `hrm.position.view` | `tenant_admin`, `viewer` |
 | `hrm.position.create` | `tenant_admin` |
 | `hrm.position.update` | `tenant_admin` |
@@ -850,6 +854,130 @@ The lossiness: if a Position was renamed after migration (e.g. "Operations Manag
 
 ---
 
+## Branches
+
+A branch is a physical location an Employee may be assigned to (HQ, warehouse, regional office). Pure CRUD; same shape as Department + Position with additional physical-location fields. Third cross-module FK on Employee (after department_id and position_id) — the pattern is mechanical at this point.
+
+### Fields
+
+Standard option from the v1 design call:
+
+- `code` (varchar 32, required) — human-friendly identifier (e.g. `B-PNH-HQ`)
+- `name` (varchar 255, required)
+- `description` (varchar 500, optional)
+- `address` (varchar 500, optional) — single free-text address line, not multi-line
+- `city` (varchar 100, optional)
+- `country_code` (varchar 2, optional) — ISO 3166-1 alpha-2, validated via regex `^[A-Z]{2}$` on the FormRequest
+- `phone` (varchar 32, optional) — permissive format ("+855 23 123 456")
+- `status` — `active` or `archived`
+
+Multi-line addresses, postal codes, state/province, GPS, operating hours, multiple addresses per branch, branch hierarchies, branch managers, and per-branch role scoping are all out of scope for v1.
+
+### country_code validation discipline
+
+**Validated only at the FormRequest layer**, not via a DB CHECK constraint. The regex `^[A-Z]{2}$` lives on `StoreBranchRequest::rules` and `UpdateBranchRequest::rules`. The DB column is `varchar(2)` with no CHECK.
+
+This is fine for v1 because the FormRequest is the only ingestion path in the codebase. **If a future slice introduces a CSV import, bulk admin tool, or any other path that bypasses FormRequest validation, that path MUST either:**
+
+1. Route the data through `StoreBranchRequest` / `UpdateBranchRequest` (preferred), OR
+2. Add a DB CHECK constraint via a new migration:
+   ```sql
+   ALTER TABLE branches ADD CONSTRAINT branches_country_code_format_check
+       CHECK (country_code IS NULL OR country_code ~ '^[A-Z]{2}$');
+   ```
+
+The seeder uses `'KH'` uppercase consistently — matches the regex. If you grep the codebase for `country_code` you should find no lowercase / mixed-case literals outside of test fixtures that explicitly exercise the validator's reject path.
+
+### Resource shape
+
+The full Branch shape returned by `show`, `store`, `update`:
+
+```json
+{
+    "data": {
+        "id": 1,
+        "code": "B-PNH-HQ",
+        "name": "Phnom Penh HQ",
+        "description": "Main headquarters and executive offices.",
+        "address": "Building 5, Street 240, Sangkat Boeung Raing, Khan Daun Penh",
+        "city": "Phnom Penh",
+        "country_code": "KH",
+        "phone": "+855 23 123 456",
+        "status": "active",
+        "employees_count": 3,
+        "created_at": "2026-05-31T10:00:00+00:00",
+        "updated_at": "2026-05-31T10:00:00+00:00"
+    }
+}
+```
+
+The list (`index`) response uses a compact shape — drops `description`, address/country/phone, `employees_count`, timestamps. **Includes `city`** because location is the at-a-glance differentiator between branches with similar names:
+
+```json
+{
+    "data": [
+        {
+            "id": 1,
+            "code": "B-PNH-HQ",
+            "name": "Phnom Penh HQ",
+            "city": "Phnom Penh",
+            "status": "active"
+        }
+    ],
+    "links": { "first": "...", "last": "...", "prev": null, "next": "..." },
+    "meta": { "current_page": 1, "from": 1, "to": 25, "per_page": 25, "total": 4, "last_page": 1 }
+}
+```
+
+This makes BranchBrief one field wider than DepartmentBrief / PositionBrief — deliberate departure justified by the domain. The Employee detail page reads `employee.branch.city` + `country_code` from the FULL Employee resource (nested branch snapshot is wider on Employee specifically); the Employee list page reads only `employee.branch_name` flat.
+
+### Endpoints
+
+Standard 5 — `GET /api/v1/hrm/branches`, `GET /api/v1/hrm/branches/{id}`, `POST`, `PATCH`, `DELETE`. Each gated by the matching `hrm.branch.*` permission. Index supports `?status=` filter and `?search=` matching name OR code OR city (ILIKE). Default sort: name ASC.
+
+### Validation errors (422)
+
+- `code` already in use within the current (tenant, company)
+- `code` exceeds 32 chars or is empty
+- `name` exceeds 255 chars or is empty
+- `description` / `address` exceed 500 chars
+- `city` exceeds 100 chars
+- `country_code` doesn't match `^[A-Z]{2}$` (rejects lowercase, non-ASCII, wrong length)
+- `phone` exceeds 32 chars
+- `status` is not in the enum
+
+### Employee `branch_id` link
+
+`employees.branch_id` is a nullable FK to `branches.id` with `ON DELETE SET NULL`. Same shape as `department_id` and `position_id`. Validated via scoped-exists Rule on the `StoreEmployeeRequest` / `UpdateEmployeeRequest`:
+
+```php
+'branch_id' => [
+    'sometimes', 'nullable', 'integer',
+    Rule::exists('branches', 'id')->where(fn ($q) => $q
+        ->where('tenant_id', $tenantId)
+        ->where('company_id', $companyId)
+        ->whereNull('deleted_at')),
+],
+```
+
+Foreign-tenant / foreign-company / soft-deleted branch ids return **422** with `errors.branch_id`. Load-bearing — same isolation guard as the other cross-module FKs.
+
+Employee's full resource carries a nested `branch` snapshot **wider than department / position** (includes `city` and `country_code`):
+
+```json
+"branch": {
+    "id": 1,
+    "code": "B-PNH-HQ",
+    "name": "Phnom Penh HQ",
+    "city": "Phnom Penh",
+    "country_code": "KH"
+}
+```
+
+The Employee detail page renders `"Phnom Penh HQ — Phnom Penh, KH"` from a single fetch. Employee's list (`brief`) carries only `branch_name` flat — `city`/`country_code` don't bleed into every list row.
+
+---
+
 ## Audit
 
 Every create / update / delete writes an entry to `audit_logs` with:
@@ -868,7 +996,7 @@ Audit rows are append-only at the DB level (immutability trigger). No HRM endpoi
 
 The following are **not** in the HRM module as shipped:
 
-- Branches table, Positions table
+- Branch-related: multi-line addresses (street1/street2/state/postal_code), branch hierarchy (parent/child branches), branch manager FK, branch-level role scoping, operating hours, GPS coordinates / map integration, branch-level capacity
 - Employee transfer history — no `previous_department_id`, no transfers table; changes to `department_id` are captured generically via `audit_logs` like any other field change
 - Department hierarchy / closure tables, department parents, manager relationships
 - Photo upload, address history, emergency contacts, salary
