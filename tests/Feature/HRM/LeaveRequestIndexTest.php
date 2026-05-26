@@ -44,7 +44,9 @@ it('returns a paginated list of leave_requests scoped to the current tenant + co
 
     $response->assertOk();
     $response->assertJsonStructure([
-        'data' => [['id', 'employee_id', 'employee_name', 'leave_type', 'start_date', 'end_date', 'status', 'approved_at', 'approver_name']],
+        // List shape now carries day_part so the frontend's Dates column
+        // can adapt per row without an extra detail fetch.
+        'data' => [['id', 'employee_id', 'employee_name', 'leave_type', 'start_date', 'end_date', 'day_part', 'status', 'approved_at', 'approver_name']],
         'meta' => ['current_page', 'per_page', 'total'],
     ]);
     expect($response->json('meta.total'))->toBe(3);

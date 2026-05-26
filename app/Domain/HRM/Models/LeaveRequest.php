@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Domain\HRM\Models;
 
+use App\Domain\HRM\Enums\DayPart;
 use App\Domain\HRM\Enums\LeaveRequestStatus;
 use App\Domain\HRM\Enums\LeaveType;
 use App\Models\User;
@@ -25,6 +26,7 @@ use Illuminate\Support\Carbon;
  * @property LeaveType $leave_type
  * @property Carbon $start_date
  * @property Carbon $end_date
+ * @property DayPart $day_part
  * @property string|null $reason
  * @property LeaveRequestStatus $status
  * @property int|null $approved_by
@@ -54,6 +56,7 @@ class LeaveRequest extends Model
         'leave_type',
         'start_date',
         'end_date',
+        'day_part',
         'reason',
         'status',
         'approved_by',
@@ -66,6 +69,7 @@ class LeaveRequest extends Model
     {
         return [
             'leave_type' => LeaveType::class,
+            'day_part' => DayPart::class,
             'status' => LeaveRequestStatus::class,
             'start_date' => 'date',
             'end_date' => 'date',

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Database\Factories\HRM;
 
+use App\Domain\HRM\Enums\DayPart;
 use App\Domain\HRM\Enums\LeaveRequestStatus;
 use App\Domain\HRM\Enums\LeaveType;
 use App\Domain\HRM\Models\Employee;
@@ -12,6 +13,7 @@ use App\Models\Company;
 use App\Models\Tenant;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Factories\Factory;
+use InvalidArgumentException;
 
 /**
  * @extends Factory<LeaveRequest>
@@ -36,6 +38,10 @@ class LeaveRequestFactory extends Factory
             'leave_type' => $this->faker->randomElement(LeaveType::cases()),
             'start_date' => $start->format('Y-m-d'),
             'end_date' => $end->format('Y-m-d'),
+            // Default to full_day so the existing test fixtures continue
+            // to behave unchanged. The halfDay() state below pins the
+            // start_date==end_date invariant when callers opt in.
+            'day_part' => DayPart::FullDay,
             'reason' => $this->faker->optional(0.7)->sentence(8),
             'status' => LeaveRequestStatus::Pending,
             // Pending rows have null approval columns; the composite DB
@@ -87,5 +93,33 @@ class LeaveRequestFactory extends Factory
             'approved_at' => now(),
             'approver_note' => $note,
         ]);
+    }
+
+    /**
+     * Half-day state — sets day_part to Morning or Afternoon AND forces
+     * start_date == end_date so the composite DB CHECK
+     * (leave_requests_day_part_single_date_check) is satisfied.
+     *
+     * Uses afterMaking() rather than state() to sync end_date so the
+     * sync runs AFTER any ->create(['start_date' => '...']) override.
+     * If we used state(), the closure would run between definition()
+     * and the create() override — we'd sync end_date to the random
+     * definition start_date, then the explicit start_date override
+     * would land and leave end_date stale, violating the CHECK.
+     */
+    public function halfDay(DayPart $part): static
+    {
+        if ($part === DayPart::FullDay) {
+            // Defensive: full_day belongs in default state, not halfDay().
+            throw new InvalidArgumentException(
+                'halfDay() requires Morning or Afternoon; pass nothing for FullDay (default).',
+            );
+        }
+
+        return $this
+            ->state(['day_part' => $part])
+            ->afterMaking(function (LeaveRequest $request): void {
+                $request->end_date = $request->start_date;
+            });
     }
 }

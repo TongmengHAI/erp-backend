@@ -111,7 +111,7 @@ class LeaveRequestController extends Controller
     {
         $this->authorizeHrm($request, 'hrm.leave_request.create');
 
-        /** @var array{employee_id: int, leave_type: string, start_date: string, end_date: string, reason?: string|null} $data */
+        /** @var array{employee_id: int, leave_type: string, start_date: string, end_date: string, day_part?: string, reason?: string|null} $data */
         $data = $request->validated();
         $leaveRequest = $action->execute($data);
         $leaveRequest->load(['employee', 'approver']);
@@ -125,7 +125,7 @@ class LeaveRequestController extends Controller
     {
         $this->authorizeHrm($request, 'hrm.leave_request.update');
 
-        /** @var array{employee_id?: int, leave_type?: string, start_date?: string, end_date?: string, reason?: string|null} $data */
+        /** @var array{employee_id?: int, leave_type?: string, start_date?: string, end_date?: string, day_part?: string, reason?: string|null} $data */
         $data = $request->validated();
         // The Action throws InvalidLeaveRequestTransitionException if the
         // row isn't pending. Its render() method self-renders 422 with

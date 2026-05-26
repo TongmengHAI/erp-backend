@@ -34,6 +34,10 @@ class LeaveRequestBriefResource extends JsonResource
             'leave_type' => $this->leave_type->value,
             'start_date' => $this->start_date->toDateString(),
             'end_date' => $this->end_date->toDateString(),
+            // List shape carries day_part so the Dates column can adapt
+            // ("Fri, May 22 (Morning)" vs "Fri, May 22 → Fri, May 26")
+            // without an extra detail fetch per row.
+            'day_part' => $this->day_part->value,
             'status' => $this->status->value,
             // Flat approval fields on the list shape — easier for the
             // table column ("Decided by: Manager User") than a nested

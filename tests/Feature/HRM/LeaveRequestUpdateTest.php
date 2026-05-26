@@ -11,6 +11,7 @@ declare(strict_types=1);
 // commitment that the contract pins the fields.
 // ─────────────────────────────────────────────────────────────────────────────
 
+use App\Domain\HRM\Enums\DayPart;
 use App\Domain\HRM\Models\Employee;
 use App\Domain\HRM\Models\LeaveRequest;
 use App\Models\Company;
@@ -136,6 +137,55 @@ it('LOAD-BEARING: PATCH on a rejected row returns 422 with error_code=invalid_tr
     $response->assertJsonPath('error_code', 'invalid_transition');
     $response->assertJsonPath('from', 'rejected');
     $response->assertJsonPath('to', 'rejected');
+});
+
+// ─── Day-part scenarios on PATCH ─────────────────────────────────────────────
+
+it('PATCHes day_part from full_day to morning when the dates already collapse to a single date', function (): void {
+    $request = LeaveRequest::factory()->forEmployee($this->employee)->create([
+        'start_date' => '2026-10-01',
+        'end_date' => '2026-10-01',
+    ]);
+
+    $this->actingAs($this->admin);
+    $response = $this->patchJson("/api/v1/hrm/leave-requests/{$request->id}", [
+        'day_part' => 'morning',
+    ]);
+
+    $response->assertOk();
+    $response->assertJsonPath('data.day_part', 'morning');
+});
+
+it('returns 422 when PATCHing day_part=morning on a row whose existing dates differ', function (): void {
+    // The closure rule reads effective post-patch values via route
+    // binding, so this also gets caught at the FormRequest layer
+    // rather than slipping through to the DB CHECK (which would 500
+    // instead of 422).
+    $request = LeaveRequest::factory()->forEmployee($this->employee)->create([
+        'start_date' => '2026-10-05',
+        'end_date' => '2026-10-09',
+    ]);
+
+    $this->actingAs($this->admin)
+        ->patchJson("/api/v1/hrm/leave-requests/{$request->id}", [
+            'day_part' => 'morning',
+        ])
+        ->assertStatus(422)
+        ->assertJsonValidationErrors('day_part');
+});
+
+it('returns 422 when PATCHing end_date to a different date on a half-day row', function (): void {
+    $request = LeaveRequest::factory()
+        ->forEmployee($this->employee)
+        ->halfDay(DayPart::Morning)
+        ->create(['start_date' => '2026-10-12']);
+
+    $this->actingAs($this->admin)
+        ->patchJson("/api/v1/hrm/leave-requests/{$request->id}", [
+            'end_date' => '2026-10-13',
+        ])
+        ->assertStatus(422)
+        ->assertJsonValidationErrors('end_date');
 });
 
 it('does not persist any changes when the pending-only guard rejects the edit', function (): void {

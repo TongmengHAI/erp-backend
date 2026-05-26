@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace App\Web\API\V1\Requests\HRM;
 
+use App\Domain\HRM\Enums\DayPart;
 use App\Domain\HRM\Enums\LeaveType;
 use App\Support\Company\CompanyContext;
 use App\Support\Tenancy\TenantContext;
+use Closure;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
@@ -60,7 +62,31 @@ class StoreLeaveRequestRequest extends FormRequest
             'start_date' => ['required', 'date'],
             // end_date >= start_date — mirrored in the DB CHECK and the
             // frontend Zod schema. Three places, one rule, defense in depth.
-            'end_date' => ['required', 'date', 'after_or_equal:start_date'],
+            // The additional `same:start_date` rule kicks in only for
+            // half-day requests via the closure below.
+            'end_date' => [
+                'required',
+                'date',
+                'after_or_equal:start_date',
+                // Conditional rule: when day_part is morning/afternoon,
+                // end_date MUST equal start_date (a half-day spans one
+                // date by definition). Triple-stack: Zod refinement →
+                // this closure → composite DB CHECK
+                // (leave_requests_day_part_single_date_check). Each
+                // guards a different attack vector.
+                function (string $attribute, mixed $value, Closure $fail): void {
+                    $dayPart = $this->input('day_part', DayPart::FullDay->value);
+                    if ($dayPart !== DayPart::FullDay->value
+                        && $value !== $this->input('start_date')) {
+                        $fail('A half-day request must start and end on the same date.');
+                    }
+                },
+            ],
+            'day_part' => [
+                'sometimes',
+                'string',
+                Rule::in(array_column(DayPart::cases(), 'value')),
+            ],
             'reason' => ['nullable', 'string', 'max:500'],
         ];
     }

@@ -38,6 +38,7 @@ final class UpdateLeaveRequestAction
      *     leave_type?: string,
      *     start_date?: string,
      *     end_date?: string,
+     *     day_part?: string,
      *     reason?: string|null,
      * }  $data
      */

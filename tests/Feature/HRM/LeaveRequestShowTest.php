@@ -8,6 +8,7 @@ declare(strict_types=1);
 // approval block shape (null for pending, populated for decided).
 // ─────────────────────────────────────────────────────────────────────────────
 
+use App\Domain\HRM\Enums\DayPart;
 use App\Domain\HRM\Models\Employee;
 use App\Domain\HRM\Models\LeaveRequest;
 use App\Models\Company;
@@ -52,8 +53,26 @@ it('returns 200 with the full resource shape, including nested employee block', 
     $response->assertJsonPath('data.employee.full_name', 'Test Person');
     $response->assertJsonPath('data.reason', 'Detail visible');
     $response->assertJsonPath('data.status', 'pending');
+    // day_part included; default is full_day for factory rows.
+    $response->assertJsonPath('data.day_part', 'full_day');
     // Approval block is null on pending rows.
     $response->assertJsonPath('data.approval', null);
+});
+
+it('returns day_part=morning on a half-day request', function (): void {
+    // Round-trip the half-day shape through the detail endpoint so the
+    // frontend's date-label composable has a fixture to consume.
+    $request = LeaveRequest::factory()
+        ->forEmployee($this->employee)
+        ->halfDay(DayPart::Morning)
+        ->create(['start_date' => '2026-11-03']);
+
+    $this->actingAs($this->admin)
+        ->getJson("/api/v1/hrm/leave-requests/{$request->id}")
+        ->assertOk()
+        ->assertJsonPath('data.day_part', 'morning')
+        ->assertJsonPath('data.start_date', '2026-11-03')
+        ->assertJsonPath('data.end_date', '2026-11-03');
 });
 
 it('returns the approval block populated for a decided (approved) row', function (): void {

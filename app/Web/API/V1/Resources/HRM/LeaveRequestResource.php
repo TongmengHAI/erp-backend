@@ -48,6 +48,12 @@ class LeaveRequestResource extends JsonResource
             'leave_type' => $this->leave_type->value,
             'start_date' => $this->start_date->toDateString(),
             'end_date' => $this->end_date->toDateString(),
+            // Day-part granularity. For full_day requests this rides
+            // alongside start/end as ordinary metadata; for half-day
+            // requests (morning/afternoon) the DB CHECK guarantees
+            // start_date == end_date, so the frontend collapses the
+            // display to a single date label.
+            'day_part' => $this->day_part->value,
             'reason' => $this->reason,
             'status' => $this->status->value,
             // Approval block — present only when decided. The composite DB

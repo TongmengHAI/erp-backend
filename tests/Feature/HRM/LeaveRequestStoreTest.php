@@ -18,7 +18,9 @@ use App\Models\User;
 use App\Support\Audit\Models\AuditLog;
 use Database\Seeders\Framework\DefaultPermissionsSeeder;
 use Database\Seeders\Framework\DefaultRolesSeeder;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Symfony\Component\HttpFoundation\Response;
 
 uses(RefreshDatabase::class);
@@ -159,6 +161,138 @@ it('returns 422 when employee_id points at a soft-deleted employee in the same c
     $this->postJson('/api/v1/hrm/leave-requests', validLeaveRequestPayload($deleted->id))
         ->assertStatus(422)
         ->assertJsonValidationErrors('employee_id');
+});
+
+// ─── Day-part scenarios ──────────────────────────────────────────────────────
+
+it('creates a full-day single-date request (day_part defaults to full_day on omission)', function (): void {
+    // Round-trip test #1 — full_day, single date. day_part omitted; the
+    // backend defaults the row to full_day. Response shape carries the
+    // field for the frontend's display composable.
+    $this->actingAs($this->admin);
+    $response = $this->postJson('/api/v1/hrm/leave-requests', validLeaveRequestPayload($this->employee->id, [
+        'start_date' => '2026-08-01',
+        'end_date' => '2026-08-01',
+    ]));
+
+    $response->assertStatus(Response::HTTP_CREATED);
+    $response->assertJsonPath('data.day_part', 'full_day');
+    $response->assertJsonPath('data.start_date', '2026-08-01');
+    $response->assertJsonPath('data.end_date', '2026-08-01');
+
+    $row = LeaveRequest::query()->latest('id')->firstOrFail();
+    expect($row->day_part->value)->toBe('full_day');
+});
+
+it('creates a full-day multi-date range (day_part=full_day explicit, start != end)', function (): void {
+    // Round-trip test #2 — full_day, multi-date range. Explicit value.
+    $this->actingAs($this->admin);
+    $response = $this->postJson('/api/v1/hrm/leave-requests', validLeaveRequestPayload($this->employee->id, [
+        'day_part' => 'full_day',
+        'start_date' => '2026-08-05',
+        'end_date' => '2026-08-09',
+    ]));
+
+    $response->assertStatus(Response::HTTP_CREATED);
+    $response->assertJsonPath('data.day_part', 'full_day');
+    $response->assertJsonPath('data.start_date', '2026-08-05');
+    $response->assertJsonPath('data.end_date', '2026-08-09');
+});
+
+it('creates a half-day morning request (day_part=morning, start == end)', function (): void {
+    // Round-trip test #3 — morning. start_date MUST equal end_date.
+    $this->actingAs($this->admin);
+    $response = $this->postJson('/api/v1/hrm/leave-requests', validLeaveRequestPayload($this->employee->id, [
+        'day_part' => 'morning',
+        'start_date' => '2026-08-15',
+        'end_date' => '2026-08-15',
+    ]));
+
+    $response->assertStatus(Response::HTTP_CREATED);
+    $response->assertJsonPath('data.day_part', 'morning');
+    $response->assertJsonPath('data.start_date', '2026-08-15');
+    $response->assertJsonPath('data.end_date', '2026-08-15');
+});
+
+it('creates a half-day afternoon request', function (): void {
+    // Symmetry check — afternoon behaves identically to morning.
+    $this->actingAs($this->admin);
+    $response = $this->postJson('/api/v1/hrm/leave-requests', validLeaveRequestPayload($this->employee->id, [
+        'day_part' => 'afternoon',
+        'start_date' => '2026-08-20',
+        'end_date' => '2026-08-20',
+    ]));
+
+    $response->assertStatus(Response::HTTP_CREATED);
+    $response->assertJsonPath('data.day_part', 'afternoon');
+});
+
+it('returns 422 errors.end_date when day_part=morning AND start_date != end_date', function (): void {
+    // LOAD-BEARING: the single-date invariant for half-day requests.
+    // The FormRequest closure catches it before the DB CHECK gets a
+    // chance. Surfaces as a field error on end_date (the field the
+    // user can reasonably "fix").
+    $this->actingAs($this->admin);
+    $this->postJson('/api/v1/hrm/leave-requests', validLeaveRequestPayload($this->employee->id, [
+        'day_part' => 'morning',
+        'start_date' => '2026-08-15',
+        'end_date' => '2026-08-16',
+    ]))
+        ->assertStatus(422)
+        ->assertJsonValidationErrors('end_date');
+});
+
+it('returns 422 errors.end_date when day_part=afternoon AND start_date != end_date', function (): void {
+    $this->actingAs($this->admin);
+    $this->postJson('/api/v1/hrm/leave-requests', validLeaveRequestPayload($this->employee->id, [
+        'day_part' => 'afternoon',
+        'start_date' => '2026-08-15',
+        'end_date' => '2026-08-17',
+    ]))
+        ->assertStatus(422)
+        ->assertJsonValidationErrors('end_date');
+});
+
+it('returns 422 when day_part is not in the enum', function (): void {
+    $this->actingAs($this->admin);
+    $this->postJson('/api/v1/hrm/leave-requests', validLeaveRequestPayload($this->employee->id, [
+        'day_part' => 'evening',
+    ]))
+        ->assertStatus(422)
+        ->assertJsonValidationErrors('day_part');
+});
+
+it('LOAD-BEARING: composite DB CHECK rejects a raw INSERT with day_part=morning AND start_date != end_date', function (): void {
+    // Bypass the model AND the FormRequest entirely — DB::table()->insert()
+    // skips both layers. This proves the composite CHECK fires regardless
+    // of application-layer validation. Same regression-protection pattern
+    // as the existing leave_requests_approval_consistency_check test.
+    //
+    // Going through LeaveRequest::create() would let the cast layer or
+    // any future model-level mutator catch the inconsistency first; the
+    // CHECK would never fire and the test would pass falsely.
+    $thrown = false;
+    try {
+        DB::table('leave_requests')->insert([
+            'tenant_id' => $this->tenant->id,
+            'company_id' => $this->company->id,
+            'employee_id' => $this->employee->id,
+            'leave_type' => 'annual',
+            'start_date' => '2026-09-01',
+            'end_date' => '2026-09-03', // ← inconsistent with day_part below
+            'day_part' => 'morning',
+            'status' => 'pending',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+    } catch (QueryException $e) {
+        $thrown = true;
+        expect($e->getMessage())->toContain('leave_requests_day_part_single_date_check');
+    }
+
+    expect($thrown)->toBeTrue(
+        'Expected the composite CHECK constraint to reject the inconsistent raw INSERT.',
+    );
 });
 
 it('forces status to pending even if client smuggles status=approved + approval columns in the payload', function (): void {

@@ -397,6 +397,7 @@ The full LeaveRequest shape returned by `show`, `store`, `update`, `approve`, `r
         "leave_type": "annual",
         "start_date": "2026-06-15",
         "end_date": "2026-06-19",
+        "day_part": "full_day",
         "reason": "Family wedding in Siem Reap.",
         "status": "pending",
         "approval": null,
@@ -436,6 +437,7 @@ The `index` response is compact for table density. Approval metadata is flattene
             "leave_type": "annual",
             "start_date": "2026-06-15",
             "end_date": "2026-06-19",
+            "day_part": "full_day",
             "status": "pending",
             "approved_at": null,
             "approver_name": null
@@ -449,6 +451,24 @@ The `index` response is compact for table density. Approval metadata is flattene
 
 - `leave_type`: `annual`, `sick`, `unpaid`, `other`
 - `status`: `pending`, `approved`, `rejected`
+- `day_part`: `full_day` (default), `morning`, `afternoon`
+
+### Day-part granularity
+
+Leave requests support half-day granularity via the `day_part` field. Values:
+
+- `full_day` (default) — request spans entire workdays. `start_date` and `end_date` may differ (a multi-day range).
+- `morning` / `afternoon` — half-day request on a single date. **`start_date` MUST equal `end_date`.**
+
+The single-date invariant for half-day requests is enforced at three layers (defense in depth):
+
+1. Zod refinement on the frontend form (rejects locally before round-trip)
+2. Closure rule on `StoreLeaveRequestRequest` and `UpdateLeaveRequestRequest` (returns 422 with `errors.end_date` or `errors.day_part` depending on which field is in the payload)
+3. Composite DB CHECK constraint `leave_requests_day_part_single_date_check` (final guard against direct SQL or bypass via raw migrations)
+
+A PATCH that changes only `day_part` to `morning` on a row whose existing dates differ is also caught — the FormRequest closures read effective post-patch values via route binding.
+
+Hourly granularity (e.g. "Tuesday 9am–12pm") is **not** supported and is out of scope — see the Out-of-scope section.
 
 ### Endpoint: GET /api/v1/hrm/leave-requests
 
@@ -479,7 +499,7 @@ Returns the full LeaveRequest shape. Cross-tenant / cross-company / soft-deleted
 
 Create a new pending request.
 
-**Request body** example:
+**Request body** example (full-day range):
 
 ```json
 {
@@ -491,6 +511,21 @@ Create a new pending request.
 }
 ```
 
+**Request body** example (half-day):
+
+```json
+{
+    "employee_id": 42,
+    "leave_type": "sick",
+    "start_date": "2026-06-20",
+    "end_date": "2026-06-20",
+    "day_part": "afternoon",
+    "reason": "Doctor's appointment."
+}
+```
+
+`day_part` is optional and defaults to `full_day` when omitted.
+
 **Returns**: **201 Created** with the full shape (status will be `pending`).
 
 **Validation errors (422):**
@@ -498,6 +533,8 @@ Create a new pending request.
 - `leave_type` is missing or not in the enum.
 - `start_date` / `end_date` are missing or not valid dates.
 - `end_date` is before `start_date`.
+- `day_part` is not in the enum.
+- `day_part` is `morning` or `afternoon` AND `start_date` != `end_date` (half-day requests are single-date by definition).
 - `reason` exceeds 500 characters.
 
 `status` and approval-related fields are **silently dropped** if submitted — the FormRequest doesn't validate them and the Action force-sets the row to `pending` with null approval columns.
@@ -597,6 +634,6 @@ The following are **not** in the HRM module as shipped:
 - Attendance, payroll
 - A generalized approval workflow primitive (the `app/Support/Workflow/` module). The leave-request state machine is currently bespoke to the resource; if/when a second approval flow lands (e.g. accounting journal entries, purchase requisitions) the shared workflow primitive is the right factoring point. Until then, premature.
 - Re-open transitions for decided leave requests (delete + re-submit covers the current need)
-- Calendar / cross-team overlap views, leave balances, accruals, half-day or hourly requests
+- Calendar / cross-team overlap views, leave balances, accruals, hourly requests (the half-day case IS supported — see the Day-part subsection)
 - Email/Slack notifications to the requester or manager
 - Bulk approve/reject
