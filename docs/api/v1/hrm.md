@@ -997,6 +997,166 @@ The Employee detail page renders `"Phnom Penh HQ — Phnom Penh, KH"` from a sin
 
 ---
 
+## Leave Balances
+
+Allocated leave days per `(employee, leave_type, period_year)` minus consumed days. The first slice in HRM v1 with computed/derived state — `remaining_days` is **not stored**, it's an aggregate over approved `leave_requests` computed at read time.
+
+### Permissions reference
+
+| Permission | Default role grants |
+| --- | --- |
+| `hrm.leave_balance.view` | `tenant_admin`, `viewer` |
+| `hrm.leave_balance.create` | `tenant_admin` |
+| `hrm.leave_balance.update` | `tenant_admin` |
+| `hrm.leave_balance.delete` | `tenant_admin` |
+
+### Stored vs computed — the load-bearing design decision
+
+`leave_balances` has:
+
+- `allocated_days` (stored) — what the company granted, editable via `PATCH`.
+- `consumed_days` (NOT stored) — `SUM(leave_requests.days_count) WHERE status='approved' AND deleted_at IS NULL` for the same `(employee, leave_type, period_year)`.
+- `remaining_days` (NOT stored) — `allocated_days - consumed_days`. **Can be negative** when an employee is over-consumed.
+
+The aggregate is encapsulated in `App\Domain\HRM\Services\LeaveBalanceQueryService::query()` — a single source of read-time truth that every endpoint and downstream consumer (Employee detail card, balance detail's "Consuming Leave Requests" cross-link) uses uniformly.
+
+**Why computed over stored** (slice plan Q1, locked):
+
+- Drift is the worst class of bug for this kind of data — a stored cache that silently desyncs from the underlying truth is invisible to the user.
+- Race conditions vanish. Concurrent approvals don't need row-level locking on a denormalized column.
+- No `BalanceRecomputeListener` to fail, retry, or land in `failed_jobs`.
+- Retroactive edits to LR dates / day_part / type, and soft-delete-then-restore, work for free.
+- The SUM is sub-millisecond at SME scale (composite partial index `leave_requests_balance_lookup_idx` covers it).
+
+If real-world scale ever forces a denormalized cache, `LeaveBalanceQueryService` is the one swap point.
+
+### Allocated leave-type subset
+
+`leave_balances.leave_type` is restricted to `('annual','sick')` via a DB CHECK constraint AND the `StoreLeaveRequestRequest` `Rule::in()`. The full `LeaveType` enum (`annual`, `sick`, `unpaid`, `other`) stays the source of truth for `leave_requests`, but **only `annual` and `sick` get balance rows**.
+
+- `unpaid` is unbounded by definition — a balance row would be meaningless.
+- `other` is treated as unbounded **in v1**. Promoting it to allocated later is additive (add to the CHECK + picker + seeder). Demoting later would be a cutover, so we lock the conservative state up front.
+
+### When does an LR deduct? (Q2, locked)
+
+| LR status | Balance impact |
+| --- | --- |
+| `pending` | None. Pending requests are informational; they don't reserve days. |
+| `approved` | Deducts `days_count` from the `(employee, leave_type, EXTRACT(YEAR FROM start_date))` balance. |
+| `rejected` | None. Rejected rows never enter the SUM. |
+| Soft-deleted approved row | Auto-recovered. The SUM filters `WHERE deleted_at IS NULL`. |
+
+There is **no balance enforcement in v1**. A manager CAN approve a 30-day request when only 12 days remain — the system shows `remaining_days: -18`, no block. Future slice. The Leave Request detail page footer mentions "balance impact: see Leave Balances" so a curious user knows where to look; no inline query.
+
+### Period boundary (Q4, locked)
+
+An LR spanning two years (Dec 28 → Jan 3) deducts **entirely from the year of `start_date`**. The aggregate uses `EXTRACT(YEAR FROM start_date)`. No splitting. The user takes 7 days starting in December → 2026's balance loses 7 days, 2027's balance is untouched.
+
+### Half-day deduction (Q3, locked)
+
+Mixed math falls out of `SUM(days_count)`:
+
+- 3 full days + 1 morning + 1 afternoon = `3 + 0.5 + 0.5 = 4.0` consumed.
+
+Because `days_count` is stored on `leave_requests` (see the Days count section under Leave Requests), the balance SUM is a clean aggregate — no `CASE WHEN day_part` duplication on the read side.
+
+### Resource shape (full)
+
+```json
+{
+    "data": {
+        "id": 3,
+        "employee": {
+            "id": 42,
+            "employee_code": "E-1001",
+            "full_name": "Sokha Chan"
+        },
+        "leave_type": "annual",
+        "period_year": 2026,
+        "allocated_days": 14.0,
+        "consumed_days": 3.0,
+        "remaining_days": 11.0,
+        "notes": "Standard annual allocation.",
+        "created_at": "2026-05-26T10:00:00+00:00",
+        "updated_at": "2026-05-26T10:00:00+00:00"
+    }
+}
+```
+
+Over-consumption renders literally as a negative `remaining_days` (e.g. `-2.0`). The frontend labels it as "Over-consumed by N days" — the wire format preserves the sign, the UI gives it semantics.
+
+### List shape (compact)
+
+```json
+{
+    "data": [
+        {
+            "id": 3,
+            "employee_id": 42,
+            "employee_name": "Sokha Chan",
+            "employee_code": "E-1001",
+            "leave_type": "annual",
+            "period_year": 2026,
+            "allocated_days": 14.0,
+            "consumed_days": 3.0,
+            "remaining_days": 11.0
+        }
+    ],
+    "meta": { "current_page": 1, "per_page": 25, "total": 12 }
+}
+```
+
+### Endpoint: GET /api/v1/hrm/leave-balances
+
+**Permission**: `hrm.leave_balance.view`
+
+**Query parameters** (all optional):
+
+| Param | Type | Notes |
+| --- | --- | --- |
+| `employee_id` | int | Scope to a single employee's balances. |
+| `leave_type` | enum | `annual` or `sick` only. `unpaid`/`other` return 422. |
+| `period_year` | int | Filter to a specific year (2000–2100). |
+| `per_page` | int | 1–100, default 25. |
+
+Default sort: `period_year DESC, employees.full_name ASC` (most-recent year first; alphabetical within a year).
+
+### Endpoint: POST /api/v1/hrm/leave-balances
+
+**Permission**: `hrm.leave_balance.create`
+
+Validates:
+
+- `employee_id` — scoped-exists in the current (tenant, company). Cross-context id returns 422 `errors.employee_id`.
+- `leave_type` — `annual` or `sick`. Other values return 422 `errors.leave_type`.
+- `period_year` — integer in `[2000, 2100]`.
+- `allocated_days` — numeric, `>= 0`, `multiple_of:0.5`, max 366. Supports half-day granularity.
+- `notes` — optional, max 500 chars.
+- Unique tuple `(tenant_id, company_id, employee_id, leave_type, period_year)` enforced via `Rule::unique()` with partial `WHERE deleted_at IS NULL`. Re-creating after soft-delete is allowed (matches the discipline used elsewhere in HRM v1).
+
+### Endpoint: PATCH /api/v1/hrm/leave-balances/{leaveBalance}
+
+**Permission**: `hrm.leave_balance.update`
+
+Editable fields: `allocated_days`, `notes`. The identity tuple (`employee_id`, `leave_type`, `period_year`) is **not** editable here — a user wanting to move a balance to a different employee/type/year creates a new row and deletes the old.
+
+### Endpoint: DELETE /api/v1/hrm/leave-balances/{leaveBalance}
+
+**Permission**: `hrm.leave_balance.delete`
+
+Soft-deletes. Returns 204 on success, 404 on a row that's already soft-deleted (or doesn't exist, or is cross-context).
+
+### Indexes
+
+| Index | Purpose |
+| --- | --- |
+| `leave_balances_unique_employee_type_year` (partial unique, `WHERE deleted_at IS NULL`) | One balance per employee per type per year. |
+| `leave_balances_tenant_company_employee_idx` | "All balances for employee X" queries. |
+| `leave_balances_tenant_company_period_idx` | "All balances for year N" queries. |
+| `leave_requests_balance_lookup_idx` (composite partial, `WHERE status='approved' AND deleted_at IS NULL`) | The SUM aggregate's covering index. Narrows the scan to approved + non-deleted rows; covers `(tenant, company, employee, type, start_date)` so `EXTRACT(YEAR FROM start_date)` GROUP BY is index-ordered. |
+
+---
+
 ## Audit
 
 Every create / update / delete writes an entry to `audit_logs` with:
@@ -1027,6 +1187,13 @@ The following are **not** in the HRM module as shipped:
 - Coupling between Attendance and Leave Requests (deferred to the Leave Balances slice)
 - A generalized approval workflow primitive (the `app/Support/Workflow/` module). The leave-request state machine is currently bespoke to the resource; if/when a second approval flow lands (e.g. accounting journal entries, purchase requisitions) the shared workflow primitive is the right factoring point. Until then, premature.
 - Re-open transitions for decided leave requests (delete + re-submit covers the current need)
-- Calendar / cross-team overlap views, leave balances, accruals, hourly requests (the half-day case IS supported — see the Day-part subsection)
+- Calendar / cross-team overlap views, accruals, hourly requests (the half-day case IS supported — see the Day-part subsection; basic Leave Balances ARE supported as of this slice — see the Leave Balances section above)
 - Email/Slack notifications to the requester or manager
 - Bulk approve/reject
+- Leave Balance enforcement (v1 allows over-consumption — system shows the negative, no block. Enforcement is a future slice.)
+- Automatic year-end rollover for leave balances (carry-over remaining days to next year)
+- Pro-rated allocation for mid-year hires
+- Leave accrual ("earn 1.25 days per month worked")
+- Leave-type management UI (the enum is currently hard-coded)
+- Balance adjustment audit-trail entries beyond the generic `audit_logs` coverage
+- Inline balance-impact display on the Leave Request detail page (deferred — balance detail is one click away; adds a query for marginal value)

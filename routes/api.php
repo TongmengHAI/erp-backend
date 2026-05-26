@@ -10,6 +10,7 @@ use App\Web\API\V1\Controllers\HRM\AttendanceController;
 use App\Web\API\V1\Controllers\HRM\BranchController;
 use App\Web\API\V1\Controllers\HRM\DepartmentController;
 use App\Web\API\V1\Controllers\HRM\EmployeeController;
+use App\Web\API\V1\Controllers\HRM\LeaveBalanceController;
 use App\Web\API\V1\Controllers\HRM\LeaveRequestController;
 use App\Web\API\V1\Controllers\HRM\PositionController;
 use App\Web\API\V1\Controllers\HRM\RejectLeaveRequestController;
@@ -94,5 +95,14 @@ Route::middleware(['auth:sanctum', 'tenant', 'company'])->group(function (): voi
         // scoped-exists guard on the FormRequest).
         Route::apiResource('branches', BranchController::class)
             ->parameters(['branches' => 'branch']);
+
+        // Leave Balances — allocated days per (employee, leave_type,
+        // period_year). remaining_days is computed on read via
+        // LeaveBalanceQueryService (LEFT JOIN over approved
+        // leave_requests aggregated by SUM(days_count)) — not a
+        // stored column. See hrm.md "Leave Balances" for the
+        // computed-state design discipline.
+        Route::apiResource('leave-balances', LeaveBalanceController::class)
+            ->parameters(['leave-balances' => 'leaveBalance']);
     });
 });

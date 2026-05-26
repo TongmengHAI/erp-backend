@@ -118,6 +118,15 @@ final class DefaultPermissionsSeeder extends Seeder
             'hrm.branch.create',
             'hrm.branch.update',
             'hrm.branch.delete',
+            // hrm.leave_balance — straight 4-perm CRUD. Read-side
+            // composes the computed remaining_days via
+            // LeaveBalanceQueryService; write-side mutates the
+            // allocation only (consumption recomputes implicitly
+            // from approved leave_requests).
+            'hrm.leave_balance.view',
+            'hrm.leave_balance.create',
+            'hrm.leave_balance.update',
+            'hrm.leave_balance.delete',
         ];
     }
 }

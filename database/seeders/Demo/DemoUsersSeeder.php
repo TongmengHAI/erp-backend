@@ -16,6 +16,7 @@ use App\Domain\HRM\Models\AttendanceRecord;
 use App\Domain\HRM\Models\Branch;
 use App\Domain\HRM\Models\Department;
 use App\Domain\HRM\Models\Employee;
+use App\Domain\HRM\Models\LeaveBalance;
 use App\Domain\HRM\Models\LeaveRequest;
 use App\Domain\HRM\Models\Position;
 use App\Domain\HRM\Support\LeaveDaysCalculator;
@@ -500,6 +501,91 @@ final class DemoUsersSeeder extends Seeder
                 'approved_at' => $now->copy()->subDays(20),
                 'approver_note' => 'Two sales calls already booked that week — please reschedule.',
             ],
+            // ── Historical approved LRs that drive Leave Balance
+            //    consumption. Tuned to land the demo balance table in
+            //    a state that exercises the full UX:
+            //
+            //      • E-1001 annual: 3 consumed   → +11 remaining (healthy)
+            //      • E-1002 annual: 10 consumed  →  0 remaining (zero edge)
+            //      • E-1002 sick:    2.5 consumed → +4.5 remaining (half-day math)
+            //      • E-1003 annual:  9 consumed  → -2 remaining (over-consumed)
+            //      • E-1004 annual:  0.5 consumed → +13.5 remaining (lone half-day)
+            //
+            //    Total: 6 extra approved rows. Idempotent on
+            //    (employee, start_date, leave_type) via firstOrCreate.
+            //    days_count routes through LeaveDaysCalculator.
+            [
+                'employee_code' => 'E-1001',
+                'leave_type' => LeaveType::Annual,
+                'start_date' => '2026-02-09',
+                'end_date' => '2026-02-11',
+                'day_part' => DayPart::FullDay,
+                'reason' => 'Family visit.',
+                'status' => LeaveRequestStatus::Approved,
+                'approved_by' => $manager->id,
+                'approved_at' => $now->copy()->subDays(110),
+                'approver_note' => null,
+            ],
+            [
+                'employee_code' => 'E-1002',
+                'leave_type' => LeaveType::Annual,
+                'start_date' => '2026-05-18',
+                'end_date' => '2026-05-22',
+                'day_part' => DayPart::FullDay,
+                'reason' => 'Annual leave — second half of allocation.',
+                'status' => LeaveRequestStatus::Approved,
+                'approved_by' => $manager->id,
+                'approved_at' => $now->copy()->subDays(15),
+                'approver_note' => null,
+            ],
+            [
+                'employee_code' => 'E-1002',
+                'leave_type' => LeaveType::Sick,
+                'start_date' => '2026-04-22',
+                'end_date' => '2026-04-23',
+                'day_part' => DayPart::FullDay,
+                'reason' => 'Stomach bug.',
+                'status' => LeaveRequestStatus::Approved,
+                'approved_by' => $manager->id,
+                'approved_at' => $now->copy()->subDays(35),
+                'approver_note' => null,
+            ],
+            [
+                'employee_code' => 'E-1002',
+                'leave_type' => LeaveType::Sick,
+                'start_date' => '2026-05-06',
+                'end_date' => '2026-05-06',
+                'day_part' => DayPart::Morning,
+                'reason' => 'Doctor appointment.',
+                'status' => LeaveRequestStatus::Approved,
+                'approved_by' => $manager->id,
+                'approved_at' => $now->copy()->subDays(22),
+                'approver_note' => null,
+            ],
+            [
+                'employee_code' => 'E-1003',
+                'leave_type' => LeaveType::Annual,
+                'start_date' => '2026-03-16',
+                'end_date' => '2026-03-24',
+                'day_part' => DayPart::FullDay,
+                'reason' => 'Extended Khmer New Year and family trip.',
+                'status' => LeaveRequestStatus::Approved,
+                'approved_by' => $manager->id,
+                'approved_at' => $now->copy()->subDays(75),
+                'approver_note' => 'Approved despite over-allocation — see HR for reconciliation.',
+            ],
+            [
+                'employee_code' => 'E-1004',
+                'leave_type' => LeaveType::Annual,
+                'start_date' => '2026-05-19',
+                'end_date' => '2026-05-19',
+                'day_part' => DayPart::Morning,
+                'reason' => 'School pickup.',
+                'status' => LeaveRequestStatus::Approved,
+                'approved_by' => $manager->id,
+                'approved_at' => $now->copy()->subDays(8),
+                'approver_note' => null,
+            ],
         ];
 
         $daysCalculator = new LeaveDaysCalculator;
@@ -509,10 +595,14 @@ final class DemoUsersSeeder extends Seeder
             if ($employee === null) {
                 continue;
             }
+            // day_part defaults to FullDay if not pinned on the row;
+            // half-day rows explicitly set Morning/Afternoon. days_count
+            // routes through LeaveDaysCalculator so the seeder produces
+            // the same value the production Action would.
+            $dayPart = $row['day_part'] ?? DayPart::FullDay;
+
             // Idempotent on (tenant, company, employee, start_date, leave_type)
             // — re-runs find the existing row instead of duplicating.
-            // days_count routes through the Calculator so the seeder
-            // can't drift from the production code path.
             LeaveRequest::query()->firstOrCreate(
                 [
                     'tenant_id' => $acmeTenant->id,
@@ -523,17 +613,73 @@ final class DemoUsersSeeder extends Seeder
                 ],
                 [
                     'end_date' => $row['end_date'],
-                    'day_part' => DayPart::FullDay,
+                    'day_part' => $dayPart,
                     'days_count' => $daysCalculator->compute(
                         $row['start_date'],
                         $row['end_date'],
-                        DayPart::FullDay,
+                        $dayPart,
                     ),
                     'reason' => $row['reason'],
                     'status' => $row['status'],
                     'approved_by' => $row['approved_by'],
                     'approved_at' => $row['approved_at'],
                     'approver_note' => $row['approver_note'],
+                ],
+            );
+        }
+
+        // ─── Demo leave_balances (12 rows: 6 employees × annual+sick) ───────
+        // Locks the period_year 2026 balance state for the demo tenant.
+        // remaining_days is NOT stored — see LeaveBalanceQueryService for
+        // the LEFT JOIN that computes it from the approved LRs above.
+        // Allocations chosen with the LRs to land:
+        //
+        //   E-1001 annual: 14 allocated  -  3 consumed = +11 healthy
+        //   E-1001 sick:    7 allocated  -  0 consumed = +7  fresh
+        //   E-1002 annual: 10 allocated  - 10 consumed =  0  exact-zero edge
+        //   E-1002 sick:    7 allocated  - 2.5 consumed = +4.5 half-day math
+        //   E-1003 annual:  7 allocated  -  9 consumed = -2  OVER-CONSUMED
+        //   E-1003 sick:    7 allocated  -  0 consumed = +7  unaffected sibling
+        //   E-1004 annual: 14 allocated  - 0.5 consumed = +13.5 lone half-day
+        //   E-1004 sick:    7 allocated  -  0 consumed = +7
+        //   E-1005 annual: 14 allocated  -  0 consumed = +14 (unpaid LR doesn't count)
+        //   E-1005 sick:    7 allocated  -  0 consumed = +7
+        //   E-1006 annual: 14 allocated  -  0 consumed = +14
+        //   E-1006 sick:    7 allocated  -  0 consumed = +7
+        //
+        // Idempotent on (tenant, company, employee, leave_type, period_year)
+        // via firstOrCreate.
+        $demoLeaveBalances = [
+            ['employee_code' => 'E-1001', 'leave_type' => LeaveType::Annual, 'allocated_days' => 14.0, 'notes' => null],
+            ['employee_code' => 'E-1001', 'leave_type' => LeaveType::Sick,   'allocated_days' => 7.0,  'notes' => null],
+            ['employee_code' => 'E-1002', 'leave_type' => LeaveType::Annual, 'allocated_days' => 10.0, 'notes' => 'Reduced annual allocation per contract amendment.'],
+            ['employee_code' => 'E-1002', 'leave_type' => LeaveType::Sick,   'allocated_days' => 7.0,  'notes' => null],
+            ['employee_code' => 'E-1003', 'leave_type' => LeaveType::Annual, 'allocated_days' => 7.0,  'notes' => 'Probationary first-year allocation.'],
+            ['employee_code' => 'E-1003', 'leave_type' => LeaveType::Sick,   'allocated_days' => 7.0,  'notes' => null],
+            ['employee_code' => 'E-1004', 'leave_type' => LeaveType::Annual, 'allocated_days' => 14.0, 'notes' => null],
+            ['employee_code' => 'E-1004', 'leave_type' => LeaveType::Sick,   'allocated_days' => 7.0,  'notes' => null],
+            ['employee_code' => 'E-1005', 'leave_type' => LeaveType::Annual, 'allocated_days' => 14.0, 'notes' => null],
+            ['employee_code' => 'E-1005', 'leave_type' => LeaveType::Sick,   'allocated_days' => 7.0,  'notes' => null],
+            ['employee_code' => 'E-1006', 'leave_type' => LeaveType::Annual, 'allocated_days' => 14.0, 'notes' => null],
+            ['employee_code' => 'E-1006', 'leave_type' => LeaveType::Sick,   'allocated_days' => 7.0,  'notes' => null],
+        ];
+
+        foreach ($demoLeaveBalances as $row) {
+            $employee = $employeesByCode[$row['employee_code']] ?? null;
+            if ($employee === null) {
+                continue;
+            }
+            LeaveBalance::query()->firstOrCreate(
+                [
+                    'tenant_id' => $acmeTenant->id,
+                    'company_id' => $acmeCompany->id,
+                    'employee_id' => $employee->id,
+                    'leave_type' => $row['leave_type'],
+                    'period_year' => 2026,
+                ],
+                [
+                    'allocated_days' => $row['allocated_days'],
+                    'notes' => $row['notes'],
                 ],
             );
         }
@@ -645,7 +791,7 @@ final class DemoUsersSeeder extends Seeder
         unset($suspendedUser);
 
         $this->command->info(
-            'DemoUsersSeeder: seeded admin@acme.test + manager@acme.test (Acme Trading Co., active) + suspended@acme.test (Suspended Co., suspended). 7 demo positions + 4 demo branches + 6 demo employees linked by department/position/branch_id + 5 demo leave_requests + 10 demo attendance_records.'
+            'DemoUsersSeeder: seeded admin@acme.test + manager@acme.test (Acme Trading Co., active) + suspended@acme.test (Suspended Co., suspended). 7 demo positions + 4 demo branches + 6 demo employees linked by department/position/branch_id + 11 demo leave_requests (5 lifecycle + 6 approved historical) + 12 demo leave_balances (annual+sick × 6 employees for 2026, including over-consumed/exact-zero/half-day cases) + 10 demo attendance_records.'
         );
     }
 }
