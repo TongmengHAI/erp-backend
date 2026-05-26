@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Domain\HRM\Actions\CreateLeaveRequestAction;
+use App\Domain\HRM\Enums\DayPart;
 use App\Domain\HRM\Enums\LeaveRequestStatus;
 use App\Domain\HRM\Enums\LeaveType;
 use App\Domain\HRM\Models\Employee;
@@ -40,6 +41,34 @@ it('creates a leave_request with auto-filled tenant_id and company_id, forced to
     expect($request->approved_by)->toBeNull();
     expect($request->approved_at)->toBeNull();
     expect($request->approver_note)->toBeNull();
+});
+
+it('computes days_count from the date range on create (5-day full request → 5.0)', function (): void {
+    $request = app(CreateLeaveRequestAction::class)->execute([
+        'employee_id' => $this->employee->id,
+        'leave_type' => LeaveType::Annual->value,
+        'start_date' => '2026-06-01',
+        'end_date' => '2026-06-05',
+        'reason' => null,
+    ]);
+
+    // decimal:1 cast returns a string-formatted decimal; the test
+    // asserts the numeric value via float cast so the comparison is
+    // shape-stable across PHP versions.
+    expect((float) $request->days_count)->toBe(5.0);
+});
+
+it('computes days_count = 0.5 for a morning half-day request', function (): void {
+    $request = app(CreateLeaveRequestAction::class)->execute([
+        'employee_id' => $this->employee->id,
+        'leave_type' => LeaveType::Sick->value,
+        'start_date' => '2026-06-15',
+        'end_date' => '2026-06-15',
+        'day_part' => DayPart::Morning->value,
+        'reason' => null,
+    ]);
+
+    expect((float) $request->days_count)->toBe(0.5);
 });
 
 it('forces status to pending even if caller smuggles status=approved into the data array', function (): void {

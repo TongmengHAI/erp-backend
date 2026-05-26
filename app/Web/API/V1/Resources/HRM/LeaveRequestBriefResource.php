@@ -38,6 +38,12 @@ class LeaveRequestBriefResource extends JsonResource
             // ("Fri, May 22 (Morning)" vs "Fri, May 22 → Fri, May 26")
             // without an extra detail fetch per row.
             'day_part' => $this->day_part->value,
+            // Derived-on-write calendar-day count. Float on the wire —
+            // the Laravel decimal:1 cast returns a string; explicit
+            // float cast keeps the JSON shape numeric so the SPA can
+            // do math (and the Leave Balance SUM has a clean column to
+            // aggregate downstream).
+            'days_count' => (float) $this->days_count,
             'status' => $this->status->value,
             // Flat approval fields on the list shape — easier for the
             // table column ("Decided by: Manager User") than a nested

@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Domain\HRM\Actions\UpdateLeaveRequestAction;
+use App\Domain\HRM\Enums\DayPart;
 use App\Domain\HRM\Enums\LeaveRequestStatus;
 use App\Domain\HRM\Enums\LeaveType;
 use App\Domain\HRM\Exceptions\InvalidLeaveRequestTransitionException;
@@ -55,6 +56,68 @@ it('updates non-status fields on a pending request and writes a diff-only audit 
     expect($row->before)->toHaveKey('end_date');
     expect($row->after)->toHaveKey('reason');
     expect($row->after)->toHaveKey('end_date');
+});
+
+it('recomputes days_count when end_date changes (5 → 7 day span)', function (): void {
+    $request = LeaveRequest::factory()->forEmployee($this->employee)->create([
+        'leave_type' => LeaveType::Annual,
+        'start_date' => '2026-06-01',
+        'end_date' => '2026-06-05',
+        'day_part' => DayPart::FullDay,
+    ]);
+    expect((float) $request->days_count)->toBe(5.0);
+
+    $updated = app(UpdateLeaveRequestAction::class)->execute($request, [
+        'end_date' => '2026-06-07',
+    ]);
+
+    expect((float) $updated->days_count)->toBe(7.0);
+});
+
+it('recomputes days_count when day_part flips to morning (3 days full → 0.5 morning)', function (): void {
+    $request = LeaveRequest::factory()->forEmployee($this->employee)->create([
+        'leave_type' => LeaveType::Sick,
+        'start_date' => '2026-06-10',
+        'end_date' => '2026-06-12',
+        'day_part' => DayPart::FullDay,
+    ]);
+    expect((float) $request->days_count)->toBe(3.0);
+
+    $updated = app(UpdateLeaveRequestAction::class)->execute($request, [
+        // Morning forces start == end, so the patch collapses end_date too.
+        'end_date' => '2026-06-10',
+        'day_part' => DayPart::Morning->value,
+    ]);
+
+    expect((float) $updated->days_count)->toBe(0.5);
+});
+
+it('does NOT recompute days_count when only reason changes (editing reason leaves days_count untouched)', function (): void {
+    $request = LeaveRequest::factory()->forEmployee($this->employee)->create([
+        'leave_type' => LeaveType::Annual,
+        'start_date' => '2026-06-01',
+        'end_date' => '2026-06-05',
+        'day_part' => DayPart::FullDay,
+        'reason' => 'Old reason.',
+    ]);
+    $beforeDays = (float) $request->days_count;
+
+    $updated = app(UpdateLeaveRequestAction::class)->execute($request, [
+        'reason' => 'New reason.',
+    ]);
+
+    expect((float) $updated->days_count)->toBe($beforeDays);
+
+    // And the audit diff must not list days_count as a changed field.
+    $row = AuditLog::query()
+        ->where('auditable_type', LeaveRequest::class)
+        ->where('auditable_id', $request->id)
+        ->where('action', 'updated')
+        ->latest('id')
+        ->first();
+
+    expect($row->before)->not->toHaveKey('days_count');
+    expect($row->after)->not->toHaveKey('days_count');
 });
 
 it('throws InvalidLeaveRequestTransitionException with from=to=approved when editing an approved request', function (): void {

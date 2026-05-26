@@ -9,6 +9,7 @@ use App\Domain\HRM\Enums\LeaveRequestStatus;
 use App\Domain\HRM\Enums\LeaveType;
 use App\Domain\HRM\Models\Employee;
 use App\Domain\HRM\Models\LeaveRequest;
+use App\Domain\HRM\Support\LeaveDaysCalculator;
 use App\Models\Company;
 use App\Models\Tenant;
 use App\Models\User;
@@ -42,6 +43,12 @@ class LeaveRequestFactory extends Factory
             // to behave unchanged. The halfDay() state below pins the
             // start_date==end_date invariant when callers opt in.
             'day_part' => DayPart::FullDay,
+            // days_count is computed in configure()'s afterMaking() hook
+            // so it ALWAYS reflects the row's final dates + day_part —
+            // even when a caller overrides dates via ->create([...]).
+            // Setting it here in definition() would freeze it to the
+            // random definition-time dates, and any override would leave
+            // a stale value. See the equivalence test for the discipline.
             'reason' => $this->faker->optional(0.7)->sentence(8),
             'status' => LeaveRequestStatus::Pending,
             // Pending rows have null approval columns; the composite DB
@@ -51,6 +58,28 @@ class LeaveRequestFactory extends Factory
             'approved_at' => null,
             'approver_note' => null,
         ];
+    }
+
+    /**
+     * Recompute days_count after every ->make() / ->create() override
+     * has landed. Factory's afterMaking fires AFTER the create-args
+     * are merged in, so dates passed via ->create(['start_date' => ...,
+     * 'end_date' => ...]) are visible here and the calculator gets the
+     * final values. halfDay() pre-pins days_count = 0.5 in its own
+     * afterMaking and only runs if the caller invoked it — when both
+     * fire, the order is registration order; halfDay() chains AFTER
+     * configure() so its 0.5 wins (which is the correct half-day value
+     * regardless of the dates we'd compute here anyway).
+     */
+    public function configure(): static
+    {
+        return $this->afterMaking(function (LeaveRequest $request): void {
+            $request->days_count = (new LeaveDaysCalculator)->compute(
+                $request->start_date,
+                $request->end_date,
+                $request->day_part,
+            );
+        });
     }
 
     /**
@@ -117,9 +146,14 @@ class LeaveRequestFactory extends Factory
         }
 
         return $this
-            ->state(['day_part' => $part])
+            ->state(['day_part' => $part, 'days_count' => 0.5])
             ->afterMaking(function (LeaveRequest $request): void {
                 $request->end_date = $request->start_date;
+                // Half-day = 0.5 by definition (calculator's contract).
+                // Restating it explicitly here matches the state() above
+                // so callers reading the factory see the value next to
+                // the day_part it lives with.
+                $request->days_count = 0.5;
             });
     }
 }

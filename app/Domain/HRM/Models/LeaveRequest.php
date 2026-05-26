@@ -27,6 +27,7 @@ use Illuminate\Support\Carbon;
  * @property Carbon $start_date
  * @property Carbon $end_date
  * @property DayPart $day_part
+ * @property float $days_count
  * @property string|null $reason
  * @property LeaveRequestStatus $status
  * @property int|null $approved_by
@@ -57,6 +58,7 @@ class LeaveRequest extends Model
         'start_date',
         'end_date',
         'day_part',
+        'days_count',
         'reason',
         'status',
         'approved_by',
@@ -70,6 +72,12 @@ class LeaveRequest extends Model
         return [
             'leave_type' => LeaveType::class,
             'day_part' => DayPart::class,
+            // decimal:1 keeps the stored value at exactly one fractional
+            // digit on the way to/from the DB, mirroring the decimal(5,1)
+            // column. Cast surface is float (Laravel returns string by
+            // default for decimals; the :1 form returns the formatted
+            // string — see LeaveDaysCalculator for the contract).
+            'days_count' => 'decimal:1',
             'status' => LeaveRequestStatus::class,
             'start_date' => 'date',
             'end_date' => 'date',

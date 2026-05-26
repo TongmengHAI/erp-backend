@@ -6,6 +6,7 @@ namespace Database\Seeders\Demo;
 
 use App\Domain\HRM\Enums\AttendanceStatus;
 use App\Domain\HRM\Enums\BranchStatus;
+use App\Domain\HRM\Enums\DayPart;
 use App\Domain\HRM\Enums\DepartmentStatus;
 use App\Domain\HRM\Enums\EmployeeStatus;
 use App\Domain\HRM\Enums\LeaveRequestStatus;
@@ -17,6 +18,7 @@ use App\Domain\HRM\Models\Department;
 use App\Domain\HRM\Models\Employee;
 use App\Domain\HRM\Models\LeaveRequest;
 use App\Domain\HRM\Models\Position;
+use App\Domain\HRM\Support\LeaveDaysCalculator;
 use App\Models\Company;
 use App\Models\Tenant;
 use App\Models\User;
@@ -500,6 +502,8 @@ final class DemoUsersSeeder extends Seeder
             ],
         ];
 
+        $daysCalculator = new LeaveDaysCalculator;
+
         foreach ($demoLeaveRequests as $row) {
             $employee = $employeesByCode[$row['employee_code']] ?? null;
             if ($employee === null) {
@@ -507,6 +511,8 @@ final class DemoUsersSeeder extends Seeder
             }
             // Idempotent on (tenant, company, employee, start_date, leave_type)
             // — re-runs find the existing row instead of duplicating.
+            // days_count routes through the Calculator so the seeder
+            // can't drift from the production code path.
             LeaveRequest::query()->firstOrCreate(
                 [
                     'tenant_id' => $acmeTenant->id,
@@ -517,6 +523,12 @@ final class DemoUsersSeeder extends Seeder
                 ],
                 [
                     'end_date' => $row['end_date'],
+                    'day_part' => DayPart::FullDay,
+                    'days_count' => $daysCalculator->compute(
+                        $row['start_date'],
+                        $row['end_date'],
+                        DayPart::FullDay,
+                    ),
                     'reason' => $row['reason'],
                     'status' => $row['status'],
                     'approved_by' => $row['approved_by'],

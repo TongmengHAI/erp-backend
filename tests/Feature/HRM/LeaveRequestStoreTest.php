@@ -281,6 +281,11 @@ it('LOAD-BEARING: composite DB CHECK rejects a raw INSERT with day_part=morning 
             'start_date' => '2026-09-01',
             'end_date' => '2026-09-03', // ← inconsistent with day_part below
             'day_part' => 'morning',
+            // days_count is NOT NULL now (micro-slice added the column).
+            // Set a placeholder so the raw INSERT reaches the composite
+            // CHECK we're actually testing — otherwise the NOT NULL on
+            // days_count fires first and shadows the day_part check.
+            'days_count' => 0.5,
             'status' => 'pending',
             'created_at' => now(),
             'updated_at' => now(),

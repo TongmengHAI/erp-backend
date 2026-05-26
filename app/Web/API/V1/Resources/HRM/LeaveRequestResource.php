@@ -54,6 +54,9 @@ class LeaveRequestResource extends JsonResource
             // start_date == end_date, so the frontend collapses the
             // display to a single date label.
             'day_part' => $this->day_part->value,
+            // Derived-on-write calendar-day count. Cast to float on the
+            // wire — see LeaveRequestBriefResource for the rationale.
+            'days_count' => (float) $this->days_count,
             'reason' => $this->reason,
             'status' => $this->status->value,
             // Approval block — present only when decided. The composite DB

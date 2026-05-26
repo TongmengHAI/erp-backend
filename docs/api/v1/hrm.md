@@ -416,6 +416,7 @@ The full LeaveRequest shape returned by `show`, `store`, `update`, `approve`, `r
         "start_date": "2026-06-15",
         "end_date": "2026-06-19",
         "day_part": "full_day",
+        "days_count": 5.0,
         "reason": "Family wedding in Siem Reap.",
         "status": "pending",
         "approval": null,
@@ -456,6 +457,7 @@ The `index` response is compact for table density. Approval metadata is flattene
             "start_date": "2026-06-15",
             "end_date": "2026-06-19",
             "day_part": "full_day",
+            "days_count": 5.0,
             "status": "pending",
             "approved_at": null,
             "approver_name": null
@@ -487,6 +489,23 @@ The single-date invariant for half-day requests is enforced at three layers (def
 A PATCH that changes only `day_part` to `morning` on a row whose existing dates differ is also caught — the FormRequest closures read effective post-patch values via route binding.
 
 Hourly granularity (e.g. "Tuesday 9am–12pm") is **not** supported and is out of scope — see the Out-of-scope section.
+
+### Days count
+
+Every leave request carries a `days_count` field — the calendar-day count derived from `start_date`, `end_date`, and `day_part`. It's a stored column, populated by `CreateLeaveRequestAction` on insert and recomputed by `UpdateLeaveRequestAction` whenever any of those three inputs changes (editing `reason` alone leaves `days_count` untouched). The single source of computation truth is `App\Domain\HRM\Support\LeaveDaysCalculator`.
+
+Rules:
+
+- `day_part: 'full_day'` → `(end_date − start_date) + 1` calendar days, inclusive of both endpoints.
+- `day_part: 'morning'` or `'afternoon'` → `0.5` by definition (the single-date invariant means `start_date == end_date`).
+
+The column is `DECIMAL(5,1)`, `NOT NULL`, with a `CHECK (days_count > 0)` constraint. The migration that adds the column backfills existing rows with raw SQL whose expression is byte-equivalent to the Calculator's PHP — equivalence asserted by `LeaveRequestDaysBackfillEquivalenceTest`.
+
+**v1 computes leave days as calendar days; business-day awareness (weekends, holidays, per-tenant calendar) is a future slice.** Implementing it requires inputs that don't exist yet (holiday calendars per country, weekend definitions per market, per-employee shift overrides) — out of scope here. When it lands, the Calculator gains a strategy interface and the `LeaveDaysCalculator` becomes the default strategy.
+
+`days_count` is the load-bearing input for the upcoming Leave Balances slice: balance consumption is `SUM(days_count) WHERE status = 'approved'`, grouped by `(employee_id, leave_type, period_year)`. The stored column means the balance aggregate is a clean SQL `SUM` rather than a `CASE WHEN` that has to mirror the day-part rules.
+
+Curious users on the Leave Request detail page can see balance impact under **Leave Balances** (separate page) — the LR workflow does not enforce balance limits in v1.
 
 ### Endpoint: GET /api/v1/hrm/leave-requests
 

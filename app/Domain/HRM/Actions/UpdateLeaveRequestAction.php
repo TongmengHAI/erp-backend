@@ -7,6 +7,7 @@ namespace App\Domain\HRM\Actions;
 use App\Domain\HRM\Enums\LeaveRequestStatus;
 use App\Domain\HRM\Exceptions\InvalidLeaveRequestTransitionException;
 use App\Domain\HRM\Models\LeaveRequest;
+use App\Domain\HRM\Support\LeaveDaysCalculator;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -32,6 +33,8 @@ use Illuminate\Support\Facades\DB;
  */
 final class UpdateLeaveRequestAction
 {
+    public function __construct(private readonly LeaveDaysCalculator $calculator) {}
+
     /**
      * @param  array{
      *     employee_id?: int,
@@ -62,6 +65,22 @@ final class UpdateLeaveRequestAction
 
         return DB::transaction(function () use ($request, $data): LeaveRequest {
             $request->fill($data);
+            // Only recompute days_count when one of the inputs changed.
+            // Editing reason alone shouldn't touch days_count — keeps the
+            // audit diff focused on the actual user intent. Eloquent's
+            // isDirty() against the freshly-filled but not-yet-saved
+            // model is the natural check.
+            if (
+                $request->isDirty('start_date')
+                || $request->isDirty('end_date')
+                || $request->isDirty('day_part')
+            ) {
+                $request->days_count = $this->calculator->compute(
+                    $request->start_date,
+                    $request->end_date,
+                    $request->day_part,
+                );
+            }
             $request->save();
 
             return $request->refresh();

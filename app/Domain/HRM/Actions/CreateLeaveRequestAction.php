@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace App\Domain\HRM\Actions;
 
+use App\Domain\HRM\Enums\DayPart;
 use App\Domain\HRM\Enums\LeaveRequestStatus;
 use App\Domain\HRM\Models\LeaveRequest;
+use App\Domain\HRM\Support\LeaveDaysCalculator;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -29,6 +31,8 @@ use Illuminate\Support\Facades\DB;
  */
 final class CreateLeaveRequestAction
 {
+    public function __construct(private readonly LeaveDaysCalculator $calculator) {}
+
     /**
      * @param  array{
      *     employee_id: int,
@@ -51,6 +55,17 @@ final class CreateLeaveRequestAction
             $request->approved_by = null;
             $request->approved_at = null;
             $request->approver_note = null;
+            // Compute days_count from the freshly-filled, cast date +
+            // day_part fields. fill() has already coerced strings to
+            // Carbon (via the model's $casts) and 'day_part' to the
+            // DayPart enum, so the calculator gets the right shapes.
+            // Falls back to FullDay if a caller didn't include day_part
+            // — mirrors the DB default.
+            $request->days_count = $this->calculator->compute(
+                $request->start_date,
+                $request->end_date,
+                $request->day_part ?? DayPart::FullDay,
+            );
             $request->save();
 
             return $request->refresh();
