@@ -2,8 +2,10 @@
 
 declare(strict_types=1);
 
+use App\Domain\HRM\Enums\LeaveType;
 use App\Domain\HRM\Models\Employee;
 use App\Domain\HRM\Models\LeaveBalance;
+use App\Domain\HRM\Models\LeaveRequest;
 use App\Models\Company;
 use App\Models\Tenant;
 use App\Models\User;
@@ -85,4 +87,69 @@ it('returns 404 for a cross-company balance id within the same tenant', function
     $this->actingAs($this->admin)
         ->getJson("/api/v1/hrm/leave-balances/{$foreign->id}")
         ->assertStatus(404);
+});
+
+it('embeds consuming_leave_requests — the approved LRs that contribute to consumed_days, sorted DESC by start_date', function (): void {
+    // The detail page renders "Consuming Leave Requests" from this list
+    // in a single round-trip. Mirror of Branch detail's "Employees at
+    // this branch" cross-module display.
+    $manager = User::factory()->forTenant($this->tenant)->create();
+    $balance = LeaveBalance::factory()->forEmployee($this->employee)->annual()->create([
+        'period_year' => 2026,
+        'allocated_days' => 14.0,
+    ]);
+
+    // Three approved LRs that contribute (annual, 2026, approved).
+    LeaveRequest::factory()->forEmployee($this->employee)->approved($manager)->create([
+        'leave_type' => LeaveType::Annual,
+        'start_date' => '2026-03-15',
+        'end_date' => '2026-03-17',
+    ]);
+    LeaveRequest::factory()->forEmployee($this->employee)->approved($manager)->create([
+        'leave_type' => LeaveType::Annual,
+        'start_date' => '2026-05-10',
+        'end_date' => '2026-05-12',
+    ]);
+    LeaveRequest::factory()->forEmployee($this->employee)->approved($manager)->create([
+        'leave_type' => LeaveType::Annual,
+        'start_date' => '2026-07-04',
+        'end_date' => '2026-07-04',
+    ]);
+    // Distractors that MUST NOT appear in the list:
+    //  • pending (status filter)
+    //  • sick (different leave_type)
+    //  • 2025 annual (different period_year — EXTRACT(YEAR FROM start_date))
+    //  • soft-deleted (status filter via the trait scope)
+    LeaveRequest::factory()->forEmployee($this->employee)->create([
+        'leave_type' => LeaveType::Annual,
+        'start_date' => '2026-08-01',
+        'end_date' => '2026-08-03',
+        // pending by default
+    ]);
+    LeaveRequest::factory()->forEmployee($this->employee)->approved($manager)->create([
+        'leave_type' => LeaveType::Sick,
+        'start_date' => '2026-04-01',
+        'end_date' => '2026-04-01',
+    ]);
+    LeaveRequest::factory()->forEmployee($this->employee)->approved($manager)->create([
+        'leave_type' => LeaveType::Annual,
+        'start_date' => '2025-12-15',
+        'end_date' => '2025-12-17',
+    ]);
+
+    $this->actingAs($this->admin);
+    $body = $this->getJson("/api/v1/hrm/leave-balances/{$balance->id}")->assertOk()->json();
+
+    expect($body['data']['consuming_leave_requests'])->toHaveCount(3);
+    // Sorted DESC by start_date — most-recent first.
+    expect(array_column($body['data']['consuming_leave_requests'], 'start_date'))
+        ->toBe(['2026-07-04', '2026-05-10', '2026-03-15']);
+    // Brief shape for each row.
+    expect(array_keys($body['data']['consuming_leave_requests'][0]))
+        ->toBe(['id', 'start_date', 'end_date', 'day_part', 'days_count', 'approved_at']);
+
+    // consumed_days should reflect the three contributing LRs only:
+    // 3 (Mar) + 3 (May) + 1 (Jul) = 7.
+    expect((float) $body['data']['consumed_days'])->toBe(7.0);
+    expect((float) $body['data']['remaining_days'])->toBe(7.0);
 });

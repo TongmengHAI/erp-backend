@@ -6,8 +6,10 @@ namespace App\Web\API\V1\Controllers\HRM;
 
 use App\Domain\HRM\Actions\CreateLeaveBalanceAction;
 use App\Domain\HRM\Actions\UpdateLeaveBalanceAction;
+use App\Domain\HRM\Enums\LeaveRequestStatus;
 use App\Domain\HRM\Enums\LeaveType;
 use App\Domain\HRM\Models\LeaveBalance;
+use App\Domain\HRM\Models\LeaveRequest;
 use App\Domain\HRM\Services\LeaveBalanceQueryService;
 use App\Web\API\V1\Controllers\Concerns\AuthorizesHrmAccess;
 use App\Web\API\V1\Controllers\Controller;
@@ -87,6 +89,27 @@ class LeaveBalanceController extends Controller
             ->with('employee')
             ->where('leave_balances.id', $leaveBalance->id)
             ->firstOrFail();
+
+        // Eager-load the approved LRs that consume from this balance.
+        // The detail page's "Consuming Leave Requests" section iterates
+        // these — same shape as Branch detail's "Employees at this
+        // branch" cross-module display, single round-trip.
+        //
+        // Filter mirrors the LeaveBalanceQueryService SUM exactly:
+        //   status='approved' AND deleted_at IS NULL
+        //   AND (employee, leave_type, EXTRACT(YEAR FROM start_date))
+        //   matches the balance row's identity tuple.
+        // Result attached as a raw model attribute so the resource
+        // sees it without an N+1.
+        $consuming = LeaveRequest::query()
+            ->where('employee_id', $row->employee_id)
+            ->where('leave_type', $row->leave_type)
+            ->where('status', LeaveRequestStatus::Approved)
+            ->whereRaw('EXTRACT(YEAR FROM start_date)::int = ?', [$row->period_year])
+            ->orderBy('start_date', 'desc')
+            ->get();
+
+        $row->setAttribute('consuming_leave_requests', $consuming);
 
         return new LeaveBalanceResource($row);
     }

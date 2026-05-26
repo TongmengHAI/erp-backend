@@ -1077,11 +1077,23 @@ Because `days_count` is stored on `leave_requests` (see the Days count section u
         "consumed_days": 3.0,
         "remaining_days": 11.0,
         "notes": "Standard annual allocation.",
+        "consuming_leave_requests": [
+            {
+                "id": 17,
+                "start_date": "2026-06-15",
+                "end_date": "2026-06-17",
+                "day_part": "full_day",
+                "days_count": 3.0,
+                "approved_at": "2026-05-24T14:30:00+00:00"
+            }
+        ],
         "created_at": "2026-05-26T10:00:00+00:00",
         "updated_at": "2026-05-26T10:00:00+00:00"
     }
 }
 ```
+
+`consuming_leave_requests` is populated only by the `show` endpoint — `store` and `update` responses return an empty array (the detail-page section is irrelevant in those flows; saving an extra subquery). The list contains the approved LRs that contributed to `consumed_days`, sorted DESC by `start_date`. Pending/rejected rows, sick rows when the balance is annual, prior-year rows, and soft-deleted rows are all excluded — the filter mirrors the SUM in `LeaveBalanceQueryService` exactly.
 
 Over-consumption renders literally as a negative `remaining_days` (e.g. `-2.0`). The frontend labels it as "Over-consumed by N days" — the wire format preserves the sign, the UI gives it semantics.
 
