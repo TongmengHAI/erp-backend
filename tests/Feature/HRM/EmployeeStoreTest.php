@@ -39,7 +39,10 @@ function validEmployeePayload(array $overrides = []): array
         'employee_code' => 'E-NEW1',
         'full_name' => 'New Hire',
         'email' => 'new@example.test',
-        'job_title' => 'Specialist',
+        // The Positions slice replaced free-text job_title with a
+        // nullable position_id FK. Default payload omits position_id —
+        // individual tests that want to exercise the FK chain
+        // ->forCompany(...) to seed a Position and pass its id.
         'hire_date' => '2026-01-15',
         'status' => 'active',
     ], $overrides);

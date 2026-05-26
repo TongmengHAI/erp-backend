@@ -24,7 +24,6 @@ it('persists an employee with the auto-filled tenant_id and company_id from cont
         'employee_code' => 'E-1234',
         'full_name' => 'Sokha Chan',
         'email' => 'sokha@example.test',
-        'job_title' => 'Operations Manager',
         'hire_date' => '2025-01-15',
         'status' => EmployeeStatus::Active->value,
     ]);
@@ -45,7 +44,6 @@ it('writes an audit row with non-null tenant_id and company_id on create', funct
         'employee_code' => 'E-AUDIT',
         'full_name' => 'Audit Subject',
         'email' => null,
-        'job_title' => null,
         'hire_date' => '2025-06-01',
         'status' => EmployeeStatus::Active->value,
     ]);
@@ -67,7 +65,6 @@ it('rolls back the transaction on a unique-violation — no partial state, no au
         'employee_code' => 'DUP-001',
         'full_name' => 'First',
         'email' => null,
-        'job_title' => null,
         'hire_date' => '2025-01-01',
         'status' => EmployeeStatus::Active->value,
     ]);
@@ -83,7 +80,6 @@ it('rolls back the transaction on a unique-violation — no partial state, no au
             'employee_code' => 'DUP-001',
             'full_name' => 'Second',
             'email' => null,
-            'job_title' => null,
             'hire_date' => '2025-01-02',
             'status' => EmployeeStatus::Active->value,
         ]);
@@ -104,7 +100,6 @@ it('captures the authenticated user as actor_id in the audit row', function (): 
         'employee_code' => 'E-ACTOR',
         'full_name' => 'Has Actor',
         'email' => null,
-        'job_title' => null,
         'hire_date' => '2025-03-01',
         'status' => EmployeeStatus::Active->value,
     ]);

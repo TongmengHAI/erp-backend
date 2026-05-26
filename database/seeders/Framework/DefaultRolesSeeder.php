@@ -83,6 +83,10 @@ final class DefaultRolesSeeder extends Seeder
                 'hrm.attendance.create',
                 'hrm.attendance.update',
                 'hrm.attendance.delete',
+                'hrm.position.view',
+                'hrm.position.create',
+                'hrm.position.update',
+                'hrm.position.delete',
             ],
             'accountant' => [
                 'accounting.journal_entry.view',
@@ -97,6 +101,7 @@ final class DefaultRolesSeeder extends Seeder
                 // for an auditor or finance read-out persona.
                 'hrm.leave_request.view',
                 'hrm.attendance.view',
+                'hrm.position.view',
             ],
         ];
     }

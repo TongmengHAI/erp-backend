@@ -6,6 +6,7 @@ namespace Database\Factories\HRM;
 
 use App\Domain\HRM\Enums\EmployeeStatus;
 use App\Domain\HRM\Models\Employee;
+use App\Domain\HRM\Models\Position;
 use App\Models\Company;
 use App\Models\Tenant;
 use Illuminate\Database\Eloquent\Factories\Factory;
@@ -27,7 +28,8 @@ class EmployeeFactory extends Factory
             'employee_code' => 'E-'.$this->faker->unique()->numberBetween(1000, 99999),
             'full_name' => $this->faker->name(),
             'email' => $this->faker->optional(0.8)->safeEmail(),
-            'job_title' => $this->faker->optional(0.9)->jobTitle(),
+            // position_id defaults to null. Callers wanting a position
+            // chain ->forPosition(Position) (mirror of forDepartment).
             'hire_date' => $this->faker->dateTimeBetween('-5 years', '-1 day')->format('Y-m-d'),
             'status' => EmployeeStatus::Active,
         ];
@@ -42,6 +44,19 @@ class EmployeeFactory extends Factory
         return $this->state(fn (): array => [
             'tenant_id' => $company->tenant_id,
             'company_id' => $company->id,
+        ]);
+    }
+
+    /**
+     * Anchor this employee to an existing Position. Same-(tenant, company)
+     * consistency is the caller's responsibility — the FormRequest's
+     * scoped-exists rule enforces it at the HTTP boundary; this factory
+     * helper is for test fixtures that already know they're aligned.
+     */
+    public function forPosition(Position $position): static
+    {
+        return $this->state(fn (): array => [
+            'position_id' => $position->id,
         ]);
     }
 

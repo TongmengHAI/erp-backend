@@ -41,18 +41,31 @@ class StoreEmployeeRequest extends FormRequest
             ],
             'full_name' => ['required', 'string', 'max:255'],
             'email' => ['nullable', 'string', 'email', 'max:255'],
-            'job_title' => ['nullable', 'string', 'max:255'],
             // Department FK — LOAD-BEARING scoped-exists. The where() clause
             // restricts the existence check to departments owned by the
             // current (tenant, company). Without it, a client could submit
             // a foreign-tenant department_id and have it persist — the DB
             // FK alone only checks "does some department with this id
             // exist," not "is it ours." This pattern repeats verbatim for
-            // any future cross-module FK (e.g. leave_requests.employee_id).
+            // every cross-module FK in the codebase (position_id below,
+            // leave_requests.employee_id, attendance_records.employee_id).
             'department_id' => [
                 'nullable',
                 'integer',
                 Rule::exists('departments', 'id')
+                    ->where(fn ($q) => $q
+                        ->where('tenant_id', $tenantId)
+                        ->where('company_id', $companyId)
+                        ->whereNull('deleted_at')),
+            ],
+            // Position FK — same load-bearing scoped-exists pattern.
+            // Replaces the old free-text job_title field (dropped in the
+            // Positions slice). Foreign-tenant or foreign-company position
+            // ids get 422 errors.position_id.
+            'position_id' => [
+                'nullable',
+                'integer',
+                Rule::exists('positions', 'id')
                     ->where(fn ($q) => $q
                         ->where('tenant_id', $tenantId)
                         ->where('company_id', $companyId)

@@ -44,6 +44,10 @@ Every endpoint is gated by a Spatie permission (the `{domain}.{resource}.{action
 | `hrm.attendance.create` | `tenant_admin` |
 | `hrm.attendance.update` | `tenant_admin` |
 | `hrm.attendance.delete` | `tenant_admin` |
+| `hrm.position.view` | `tenant_admin`, `viewer` |
+| `hrm.position.create` | `tenant_admin` |
+| `hrm.position.update` | `tenant_admin` |
+| `hrm.position.delete` | `tenant_admin` |
 
 `hrm.leave_request.approve` represents **decision-making authority** — it gates both the `/approve` and `/reject` endpoints. A manager who can decide on requests has decision authority, not "approval-only authority." This means a future "team_lead" role can be granted `.view + .approve` (decide on requests, no CRUD), and a future "employee" role can be granted `.view + .create + .update + .delete` (manage their own requests, no decisions) — without needing to split the permission later in a way that breaks existing role assignments.
 
@@ -77,11 +81,15 @@ The full Employee shape returned by `show`, `store`, and `update`:
         "employee_code": "E-1001",
         "full_name": "Sokha Chan",
         "email": "sokha.chan@acme.test",
-        "job_title": "Operations Manager",
         "department": {
             "id": 1,
             "code": "D-OPS",
             "name": "Operations"
+        },
+        "position": {
+            "id": 1,
+            "code": "P-OPS-MGR",
+            "title": "Operations Manager"
         },
         "hire_date": "2022-03-15",
         "status": "active",
@@ -91,9 +99,9 @@ The full Employee shape returned by `show`, `store`, and `update`:
 }
 ```
 
-`department` is `null` when the employee has no current department, or when the assigned department has been soft-deleted (the FK still references the tombstone row but the relation returns null).
+Both `department` and `position` are `null` when the employee has no current value, or when the assigned record has been soft-deleted (the FK still references the tombstone row but the relation returns null).
 
-The list (`index`) response uses a compact shape — no `created_at`/`updated_at`/`email`, and `department` is flattened to a single `department_name` string:
+The list (`index`) response uses a compact shape — no `created_at`/`updated_at`/`email`, and the nested objects are flattened to single `department_name` / `position_title` strings:
 
 ```json
 {
@@ -103,7 +111,7 @@ The list (`index`) response uses a compact shape — no `created_at`/`updated_at
             "employee_code": "E-1001",
             "full_name": "Sokha Chan",
             "department_name": "Operations",
-            "job_title": "Operations Manager",
+            "position_title": "Operations Manager",
             "hire_date": "2022-03-15",
             "status": "active"
         }
@@ -122,8 +130,8 @@ The list (`index`) response uses a compact shape — no `created_at`/`updated_at
 | `employee_code` | string ≤ 32 chars | yes | Unique within `(tenant, company)`. Free-form (e.g. `E-1001`, `ACME-042`, `2026-001`). |
 | `full_name` | string ≤ 255 | yes | Display name. No structured first/last split in this slice. |
 | `email` | string ≤ 255 or `null` | no | Standard email format if provided. Not unique. |
-| `job_title` | string ≤ 255 or `null` | no | Plain text — not linked to a Positions table in this slice. |
 | `department_id` | int or `null` | no | FK → `departments.id`. MUST point at a department in the same `(tenant, company)` — enforced via scoped `exists` validation. A foreign-tenant or foreign-company id returns **422** with `errors.department_id`. ON DELETE SET NULL: if the department is hard-deleted, the field clears; soft-delete leaves the FK but the relation returns null. |
+| `position_id` | int or `null` | no | FK → `positions.id`. Replaces the old free-text `job_title` column dropped in the Positions slice. Same load-bearing scoped-`exists` validation as `department_id` — foreign-context ids return **422** with `errors.position_id`. ON DELETE SET NULL. |
 | `hire_date` | ISO 8601 date (`YYYY-MM-DD`) | yes | Stored as DATE. No time component. |
 | `status` | enum | yes | One of `active`, `on_leave`, `terminated`. |
 
@@ -148,6 +156,7 @@ List employees in the current `(tenant, company)`. Paginated.
 | `search` | string ≤ 255 | no | Case-insensitive partial match against `full_name` OR `employee_code` (PostgreSQL ILIKE). |
 | `status` | enum | no | One of `active`, `on_leave`, `terminated`. |
 | `department_id` | int | no | Filter to a specific department. Cross-tenant or cross-company ids silently return empty results (the global scopes don't match) — no 422, no leak. Used by the Department detail page's "View employees" link. |
+| `position_id` | int | no | Filter to employees holding a specific position. Same silent-empty semantics as `department_id`. Used by the Position detail page's "Employees with this position" link. |
 | `per_page` | int 1–100 | no | Default 25. |
 | `page` | int ≥ 1 | no | Default 1. Standard Laravel pagination. |
 
@@ -174,8 +183,8 @@ Create a new employee. `tenant_id` and `company_id` are derived from the request
     "employee_code": "E-1042",
     "full_name": "New Hire",
     "email": "new@acme.test",
-    "job_title": "Specialist",
     "department_id": 1,
+    "position_id": 5,
     "hire_date": "2026-05-19",
     "status": "active"
 }
@@ -188,6 +197,7 @@ Create a new employee. `tenant_id` and `company_id` are derived from the request
 - `employee_code` exceeds 32 chars or is empty.
 - `email` is malformed.
 - `department_id` does not exist, OR belongs to a different `(tenant, company)`, OR points at a soft-deleted department.
+- `position_id` does not exist, OR belongs to a different `(tenant, company)`, OR points at a soft-deleted position.
 - `hire_date` is not a valid date.
 - `status` is not in the enum.
 
@@ -201,7 +211,7 @@ Partial update. Only fields present in the body are touched (`sometimes` validat
 
 ```json
 {
-    "job_title": "Senior Specialist",
+    "position_id": 5,
     "status": "on_leave"
 }
 ```
@@ -750,6 +760,93 @@ Partial update. All field constraints from `store` apply (`sometimes` rule lets 
 **Permission**: `hrm.attendance.delete`
 
 Soft-delete. Returns **204 No Content**. A subsequent re-create for the same `(employee, date)` works because the partial unique index excludes soft-deleted rows.
+
+---
+
+## Positions
+
+A position is a structured role label (e.g. "Operations Manager", "Senior Accountant"). Replaces the free-text `employees.job_title` column that existed before this slice — see the Migration discipline subsection below.
+
+Positions are tenant + company scoped, status-flagged (`active` / `archived`), and referenced by employees via the nullable `employees.position_id` FK. Same shape as Departments.
+
+### Relationship to Departments
+
+**Positions are department-agnostic.** A Position has NO FK to Department. The Employee carries `department_id` AND `position_id` as two independent dimensions ("who reports to which team" and "what is their role" are orthogonal in v1). If the data later shows that Positions cluster strongly by Department, the coupling can be added non-destructively as a future slice.
+
+### Full resource shape
+
+```json
+{
+    "data": {
+        "id": 5,
+        "code": "P-OPS-MGR",
+        "title": "Operations Manager",
+        "description": "Heads day-to-day operations.",
+        "status": "active",
+        "employees_count": 3,
+        "created_at": "2026-05-30T10:00:00+00:00",
+        "updated_at": "2026-05-30T10:00:00+00:00"
+    }
+}
+```
+
+`employees_count` is computed via `loadCount('employees')` on the show endpoint — single subquery, not per-row N+1. Same pattern as `Department.employees_count`.
+
+### List shape
+
+```json
+{
+    "data": [
+        { "id": 5, "code": "P-OPS-MGR", "title": "Operations Manager", "status": "active" }
+    ],
+    "meta": { "current_page": 1, "per_page": 25, "total": 7 }
+}
+```
+
+Default sort: `title ASC`. List drops `description`, `employees_count`, and timestamps for payload efficiency.
+
+### Enum values
+
+- `status`: `active`, `archived`
+
+### Endpoints
+
+All five standard CRUD endpoints under `/api/v1/hrm/positions/`. Same shape as Departments — see that section for filter/error/permission patterns. Specific notes:
+
+- **POST** validation: `code` ≤ 32, unique within `(tenant, company)` (partial unique index excludes soft-deleted rows so re-creating after delete works), `title` ≤ 255 required, `description` ≤ 500 nullable, `status` enum required
+- **PATCH** validation: same rules, `sometimes` modifier, ignore-self on the uniqueness check
+- **GET** list: filters `?search=`, `?status=`, `?per_page=`. Search is case-insensitive ILIKE against `title` OR `code`
+- **DELETE**: soft-delete. Re-creating with same code works after delete (partial unique index discipline)
+
+---
+
+## Positions migration discipline (production deployment sequence)
+
+The Positions slice REPLACED the free-text `employees.job_title` column with the structured `employees.position_id` FK. Three schema migrations + one data migration step were required:
+
+1. `2026_05_30_*_create_positions_table.php` — creates the new table (additive)
+2. `2026_05_30_*_add_position_id_to_employees_table.php` — adds the nullable FK column to `employees` (additive; leaves `position_id = NULL` on all existing rows)
+3. **Per-tenant data-migration command** — iterates each tenant's distinct `job_title` values, creates Position records, sets `position_id` on each employee accordingly. NOT bundled into any schema migration; lives in the deployment runbook (which does not exist yet — this slice flags that production requires one)
+4. `2026_05_30_*_drop_job_title_from_employees_table.php` — destroys the old free-text column
+
+### ⚠️ Production warning ⚠️
+
+**Do NOT run the `drop_job_title_from_employees` migration in production until the per-tenant data-migration command has completed on this tenant.** Running steps 1, 2, and 4 consecutively without step 3 LOSES all `job_title` values irrecoverably — the dropping migration deletes the column before any row has its `position_id` populated.
+
+The dev workflow is safe (the dev DB is reset frequently via `migrate:fresh` + `DemoUsersSeeder`, which creates Positions before Employees). Production has no equivalent reset; deployment must serialize the four steps in order.
+
+### Rollback
+
+The slice is reversible at the cost of one forward migration:
+
+```
+ALTER TABLE employees ADD COLUMN job_title VARCHAR(255) NULL;
+UPDATE employees SET job_title = (SELECT title FROM positions WHERE id = employees.position_id);
+ALTER TABLE employees DROP COLUMN position_id;
+DROP TABLE positions;
+```
+
+The lossiness: if a Position was renamed after migration (e.g. "Operations Manager" → "Operations Director"), the rollback copies the renamed value, not the original. Acceptable — the rollback is itself an action with information, not a time machine.
 
 ---
 

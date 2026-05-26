@@ -43,19 +43,21 @@ class EmployeeController extends Controller
             'search' => ['sometimes', 'nullable', 'string', 'max:255'],
             'status' => ['sometimes', 'nullable', 'string',
                 Rule::in(array_column(EmployeeStatus::cases(), 'value'))],
-            // Per-department filter. Cross-tenant department ids return empty
-            // results (the Employee scope simply won't match) rather than a
-            // 422 — that's correct: the param is just a where clause, not a
-            // resource lookup. The load-bearing isolation lives in the
-            // form-request side of the FK.
+            // Per-department / per-position filters. Cross-tenant ids return
+            // empty results (the Employee scope simply won't match) rather
+            // than a 422 — that's correct: the param is just a where clause,
+            // not a resource lookup. The load-bearing isolation lives in the
+            // form-request side of each FK.
             'department_id' => ['sometimes', 'nullable', 'integer'],
+            'position_id' => ['sometimes', 'nullable', 'integer'],
             'per_page' => ['sometimes', 'integer', 'min:1', 'max:100'],
         ]);
 
-        // Eager-load department so EmployeeBriefResource's `department_name`
-        // accessor is a single attribute read, not a per-row query (N+1
-        // protection on a paginated list endpoint).
-        $query = Employee::query()->with('department')->orderBy('full_name');
+        // Eager-load department + position so EmployeeBriefResource's
+        // `department_name` + `position_title` accessors are single
+        // attribute reads, not per-row queries (N+1 protection on a
+        // paginated list endpoint).
+        $query = Employee::query()->with(['department', 'position'])->orderBy('full_name');
 
         if (! empty($validated['search'])) {
             $needle = '%'.$validated['search'].'%';
@@ -79,6 +81,14 @@ class EmployeeController extends Controller
             $query->where('department_id', $validated['department_id']);
         }
 
+        // Per-position filter — mirror of department_id above. The
+        // frontend's filter-chip pattern (Session 3 generalisation)
+        // surfaces this via ?position_id=N on the Employee list URL.
+        if (array_key_exists('position_id', $validated)
+            && $validated['position_id'] !== null) {
+            $query->where('position_id', $validated['position_id']);
+        }
+
         $perPage = (int) ($validated['per_page'] ?? 25);
 
         return EmployeeBriefResource::collection($query->paginate($perPage));
@@ -91,9 +101,9 @@ class EmployeeController extends Controller
         // Route-model binding already filtered by tenant + company (global
         // scopes apply to the implicit query). If $employee resolved, the
         // user has structural access; we still gate the permission above.
-        // Eager-load department for the resource projection — single read
-        // rather than the relation triggering a second query inside toArray.
-        $employee->load('department');
+        // Eager-load department + position for the resource projection —
+        // two single reads rather than two relation triggers inside toArray.
+        $employee->load(['department', 'position']);
 
         return new EmployeeResource($employee);
     }
@@ -102,13 +112,13 @@ class EmployeeController extends Controller
     {
         $this->authorizeHrm($request, 'hrm.employee.create');
 
-        /** @var array{employee_code: string, full_name: string, email?: string|null, job_title?: string|null, department_id?: int|null, hire_date: string, status: string} $data */
+        /** @var array{employee_code: string, full_name: string, email?: string|null, department_id?: int|null, position_id?: int|null, hire_date: string, status: string} $data */
         $data = $request->validated();
         $employee = $action->execute($data);
-        // Load department for the response so the SPA can show it on the
-        // detail page it redirects to. The action refresh() reloaded the
-        // attributes; this loads the relation.
-        $employee->load('department');
+        // Load department + position for the response so the SPA can show
+        // them on the detail page it redirects to. The action refresh()
+        // reloaded the attributes; this loads the relations.
+        $employee->load(['department', 'position']);
 
         return (new EmployeeResource($employee))
             ->response()
@@ -119,10 +129,10 @@ class EmployeeController extends Controller
     {
         $this->authorizeHrm($request, 'hrm.employee.update');
 
-        /** @var array{employee_code?: string, full_name?: string, email?: string|null, job_title?: string|null, department_id?: int|null, hire_date?: string, status?: string} $data */
+        /** @var array{employee_code?: string, full_name?: string, email?: string|null, department_id?: int|null, position_id?: int|null, hire_date?: string, status?: string} $data */
         $data = $request->validated();
         $employee = $action->execute($employee, $data);
-        $employee->load('department');
+        $employee->load(['department', 'position']);
 
         return new EmployeeResource($employee);
     }

@@ -18,21 +18,21 @@ beforeEach(function (): void {
     app(CompanyContext::class)->setCurrent($this->company);
 
     $this->employee = Employee::factory()->forCompany($this->company)->create([
-        'job_title' => 'Junior Clerk',
+        'full_name' => 'Junior Clerk',
         'status' => EmployeeStatus::Active,
     ]);
 });
 
 it('updates only the supplied fields and leaves the rest untouched', function (): void {
-    $originalName = $this->employee->full_name;
     $originalCode = $this->employee->employee_code;
+    $originalHire = $this->employee->hire_date->toDateString();
 
     $updated = app(UpdateEmployeeAction::class)
-        ->execute($this->employee, ['job_title' => 'Senior Clerk']);
+        ->execute($this->employee, ['full_name' => 'Senior Clerk']);
 
-    expect($updated->job_title)->toBe('Senior Clerk');
-    expect($updated->full_name)->toBe($originalName);
+    expect($updated->full_name)->toBe('Senior Clerk');
     expect($updated->employee_code)->toBe($originalCode);
+    expect($updated->hire_date->toDateString())->toBe($originalHire);
 });
 
 it('writes an audit row with a diff-only before/after of just the changed fields', function (): void {

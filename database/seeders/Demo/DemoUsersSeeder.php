@@ -9,10 +9,12 @@ use App\Domain\HRM\Enums\DepartmentStatus;
 use App\Domain\HRM\Enums\EmployeeStatus;
 use App\Domain\HRM\Enums\LeaveRequestStatus;
 use App\Domain\HRM\Enums\LeaveType;
+use App\Domain\HRM\Enums\PositionStatus;
 use App\Domain\HRM\Models\AttendanceRecord;
 use App\Domain\HRM\Models\Department;
 use App\Domain\HRM\Models\Employee;
 use App\Domain\HRM\Models\LeaveRequest;
+use App\Domain\HRM\Models\Position;
 use App\Models\Company;
 use App\Models\Tenant;
 use App\Models\User;
@@ -35,7 +37,11 @@ use Illuminate\Support\Facades\Hash;
  *   Tenant: Acme Trading Co. (active)
  *     └── Company: Acme Trading Co. (active)
  *           ├── admin@acme.test / password — tenant_admin role
- *           ├── 6 employees (mix of statuses: active / on_leave / terminated)
+ *           ├── 7 positions (6 active matching the historical job_title
+ *           │                values, 1 archived "Intern (Retired)")
+ *           ├── 6 employees, every one linked to a position via position_id
+ *           │                (the Positions slice replaced the old
+ *           │                 free-text job_title field)
  *           ├── 4 departments (3 active: Operations, Finance, Sales;
  *           │                  1 archived: Warehouse)
  *           └── 5 of 6 employees assigned to departments (Operations × 2,
@@ -143,20 +149,53 @@ final class DemoUsersSeeder extends Seeder
         // sets Spatie's team_id for the call and restores it on exit.
         $admin->assignTenantRole($acmeTenant, 'tenant_admin');
 
-        // ─── Demo employees in Acme Trading Co. ───────────────────────────────
-        // Six employees with deterministic codes so re-runs don't duplicate.
-        // Mix of statuses so the list page exercises StatusBadge + filter UI.
-        // CompanyContext is set for the duration of the inserts because
-        // Employee uses BelongsToCompany and would otherwise throw without it.
+        // CompanyContext is required for any tenant-scoped writes below
+        // (Position, Employee, Department, LeaveRequest, AttendanceRecord).
         app(CompanyContext::class)->setCurrent($acmeCompany);
 
+        // ─── Demo positions in Acme Trading Co. ───────────────────────────────
+        // Six positions matching the historical free-text job_title values
+        // from before the Positions slice. Plus one archived position to
+        // exercise the list page's status filter. Created BEFORE employees
+        // so the employee seed below can resolve position_id by code.
+        $demoPositions = [
+            ['code' => 'P-OPS-MGR',  'title' => 'Operations Manager', 'description' => 'Heads day-to-day operations.',                 'status' => PositionStatus::Active],
+            ['code' => 'P-FIN-SR',   'title' => 'Senior Accountant',  'description' => 'Senior finance role; closes books.',           'status' => PositionStatus::Active],
+            ['code' => 'P-SAL-LEAD', 'title' => 'Sales Lead',         'description' => 'Leads the sales team.',                        'status' => PositionStatus::Active],
+            ['code' => 'P-WH-CLERK', 'title' => 'Warehouse Clerk',    'description' => 'Inventory handling and dispatch.',             'status' => PositionStatus::Active],
+            ['code' => 'P-HR-COORD', 'title' => 'HR Coordinator',     'description' => 'Coordinates HR programs and onboarding.',      'status' => PositionStatus::Active],
+            ['code' => 'P-FIN-JR',   'title' => 'Junior Accountant',  'description' => 'Junior finance role; supports the seniors.',   'status' => PositionStatus::Active],
+            ['code' => 'P-INTERN',   'title' => 'Intern (Retired)',   'description' => 'Historical intern role — list-filter exercise.', 'status' => PositionStatus::Archived],
+        ];
+
+        foreach ($demoPositions as $row) {
+            Position::query()->firstOrCreate(
+                ['tenant_id' => $acmeTenant->id, 'company_id' => $acmeCompany->id, 'code' => $row['code']],
+                [
+                    'title' => $row['title'],
+                    'description' => $row['description'],
+                    'status' => $row['status'],
+                ],
+            );
+        }
+
+        $positionByCode = Position::query()
+            ->where('tenant_id', $acmeTenant->id)
+            ->where('company_id', $acmeCompany->id)
+            ->pluck('id', 'code');
+
+        // ─── Demo employees in Acme Trading Co. ───────────────────────────────
+        // Six employees with deterministic codes so re-runs don't duplicate.
+        // position_code replaces the old free-text 'title' field (the
+        // Positions slice cutover). Mix of statuses so the list page
+        // exercises StatusBadge + filter UI.
         $demoEmployees = [
-            ['code' => 'E-1001', 'name' => 'Sokha Chan',    'email' => 'sokha.chan@acme.test',  'title' => 'Operations Manager', 'hire' => '2022-03-15', 'status' => EmployeeStatus::Active],
-            ['code' => 'E-1002', 'name' => 'Rithy Pich',    'email' => 'rithy.pich@acme.test',  'title' => 'Senior Accountant',  'hire' => '2021-09-01', 'status' => EmployeeStatus::Active],
-            ['code' => 'E-1003', 'name' => 'Bopha Nuon',    'email' => 'bopha.nuon@acme.test',  'title' => 'Sales Lead',         'hire' => '2023-01-10', 'status' => EmployeeStatus::Active],
-            ['code' => 'E-1004', 'name' => 'Vichea Sok',    'email' => null,                     'title' => 'Warehouse Clerk',    'hire' => '2024-06-20', 'status' => EmployeeStatus::OnLeave],
-            ['code' => 'E-1005', 'name' => 'Channary Lim',  'email' => 'channary.lim@acme.test', 'title' => 'HR Coordinator',     'hire' => '2022-11-08', 'status' => EmployeeStatus::Active],
-            ['code' => 'E-1006', 'name' => 'Dara Heng',     'email' => 'dara.heng@acme.test',    'title' => 'Junior Accountant',  'hire' => '2020-04-05', 'status' => EmployeeStatus::Terminated],
+            ['code' => 'E-1001', 'name' => 'Sokha Chan',    'email' => 'sokha.chan@acme.test',  'position_code' => 'P-OPS-MGR',  'hire' => '2022-03-15', 'status' => EmployeeStatus::Active],
+            ['code' => 'E-1002', 'name' => 'Rithy Pich',    'email' => 'rithy.pich@acme.test',  'position_code' => 'P-FIN-SR',   'hire' => '2021-09-01', 'status' => EmployeeStatus::Active],
+            ['code' => 'E-1003', 'name' => 'Bopha Nuon',    'email' => 'bopha.nuon@acme.test',  'position_code' => 'P-SAL-LEAD', 'hire' => '2023-01-10', 'status' => EmployeeStatus::Active],
+            ['code' => 'E-1004', 'name' => 'Vichea Sok',    'email' => null,                     'position_code' => 'P-WH-CLERK', 'hire' => '2024-06-20', 'status' => EmployeeStatus::OnLeave],
+            ['code' => 'E-1005', 'name' => 'Channary Lim',  'email' => 'channary.lim@acme.test', 'position_code' => 'P-HR-COORD', 'hire' => '2022-11-08', 'status' => EmployeeStatus::Active],
+            ['code' => 'E-1006', 'name' => 'Dara Heng',     'email' => 'dara.heng@acme.test',    'position_code' => 'P-FIN-JR',   'hire' => '2020-04-05', 'status' => EmployeeStatus::Terminated],
         ];
 
         foreach ($demoEmployees as $row) {
@@ -165,7 +204,7 @@ final class DemoUsersSeeder extends Seeder
                 [
                     'full_name' => $row['name'],
                     'email' => $row['email'],
-                    'job_title' => $row['title'],
+                    'position_id' => $positionByCode[$row['position_code']] ?? null,
                     'hire_date' => $row['hire'],
                     'status' => $row['status'],
                 ],
@@ -478,7 +517,7 @@ final class DemoUsersSeeder extends Seeder
         unset($suspendedUser);
 
         $this->command->info(
-            'DemoUsersSeeder: seeded admin@acme.test + manager@acme.test (Acme Trading Co., active) + suspended@acme.test (Suspended Co., suspended). 5 demo leave_requests + 10 demo attendance_records seeded (covering every status enum value).'
+            'DemoUsersSeeder: seeded admin@acme.test + manager@acme.test (Acme Trading Co., active) + suspended@acme.test (Suspended Co., suspended). 7 demo positions + 6 demo employees linked by position_id + 5 demo leave_requests + 10 demo attendance_records (covering every status enum value).'
         );
     }
 }

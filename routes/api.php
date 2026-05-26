@@ -10,6 +10,7 @@ use App\Web\API\V1\Controllers\HRM\AttendanceController;
 use App\Web\API\V1\Controllers\HRM\DepartmentController;
 use App\Web\API\V1\Controllers\HRM\EmployeeController;
 use App\Web\API\V1\Controllers\HRM\LeaveRequestController;
+use App\Web\API\V1\Controllers\HRM\PositionController;
 use App\Web\API\V1\Controllers\HRM\RejectLeaveRequestController;
 use Illuminate\Support\Facades\Route;
 
@@ -79,5 +80,11 @@ Route::middleware(['auth:sanctum', 'tenant', 'company'])->group(function (): voi
         // unique DB index.
         Route::apiResource('attendance', AttendanceController::class)
             ->parameters(['attendance' => 'attendance']);
+
+        // Positions — plain CRUD, no workflow endpoints. Replaces the
+        // free-text employees.job_title with a structured FK; see
+        // hrm.md "Positions" section for the migration discipline.
+        Route::apiResource('positions', PositionController::class)
+            ->parameters(['positions' => 'position']);
     });
 });

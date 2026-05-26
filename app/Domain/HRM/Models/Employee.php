@@ -22,14 +22,15 @@ use Illuminate\Support\Carbon;
  * @property string $employee_code
  * @property string $full_name
  * @property string|null $email
- * @property string|null $job_title
  * @property int|null $department_id
+ * @property int|null $position_id
  * @property Carbon $hire_date
  * @property EmployeeStatus $status
  * @property Carbon $created_at
  * @property Carbon $updated_at
  * @property Carbon|null $deleted_at
  * @property Department|null $department
+ * @property Position|null $position
  */
 class Employee extends Model
 {
@@ -48,8 +49,8 @@ class Employee extends Model
         'employee_code',
         'full_name',
         'email',
-        'job_title',
         'department_id',
+        'position_id',
         'hire_date',
         'status',
     ];
@@ -74,6 +75,18 @@ class Employee extends Model
     public function department(): BelongsTo
     {
         return $this->belongsTo(Department::class);
+    }
+
+    /**
+     * The employee's current position within the same (tenant, company).
+     * Nullable — same lifecycle as department. Replaces the old free-text
+     * job_title column (dropped in 2026_05_30_*_drop_job_title_from_employees).
+     *
+     * @return BelongsTo<Position, $this>
+     */
+    public function position(): BelongsTo
+    {
+        return $this->belongsTo(Position::class);
     }
 
     protected static function newFactory(): EmployeeFactory

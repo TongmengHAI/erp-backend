@@ -9,6 +9,7 @@ declare(strict_types=1);
 
 use App\Domain\HRM\Models\Department;
 use App\Domain\HRM\Models\Employee;
+use App\Domain\HRM\Models\Position;
 use App\Models\Company;
 use App\Models\Tenant;
 use App\Models\User;
@@ -34,21 +35,20 @@ beforeEach(function (): void {
     $this->employee = Employee::factory()->forCompany($this->company)->create([
         'employee_code' => 'E-EDIT',
         'full_name' => 'Original Name',
-        'job_title' => 'Original Title',
     ]);
 });
 
 it('updates the employee and returns the refreshed resource', function (): void {
     $this->actingAs($this->admin);
     $response = $this->patchJson("/api/v1/hrm/employees/{$this->employee->id}", [
-        'job_title' => 'Updated Title',
+        'full_name' => 'Updated Name',
     ]);
 
     $response->assertOk();
-    $response->assertJsonPath('data.job_title', 'Updated Title');
+    $response->assertJsonPath('data.full_name', 'Updated Name');
     // Unchanged fields stay intact.
-    $response->assertJsonPath('data.full_name', 'Original Name');
-    expect($this->employee->fresh()->job_title)->toBe('Updated Title');
+    $response->assertJsonPath('data.employee_code', 'E-EDIT');
+    expect($this->employee->fresh()->full_name)->toBe('Updated Name');
 });
 
 it('writes a diff-only audit row capturing only the changed fields', function (): void {
@@ -70,7 +70,7 @@ it('writes a diff-only audit row capturing only the changed fields', function ()
 });
 
 it('returns 401 when called with no authenticated session', function (): void {
-    $this->patchJson("/api/v1/hrm/employees/{$this->employee->id}", ['job_title' => 'X'])
+    $this->patchJson("/api/v1/hrm/employees/{$this->employee->id}", ['full_name' => 'X'])
         ->assertStatus(401);
 });
 
@@ -82,7 +82,7 @@ it('returns 403 when the authenticated user lacks hrm.employee.update permission
     $viewer->assignTenantRole($this->tenant, 'viewer');
 
     $this->actingAs($viewer)
-        ->patchJson("/api/v1/hrm/employees/{$this->employee->id}", ['job_title' => 'X'])
+        ->patchJson("/api/v1/hrm/employees/{$this->employee->id}", ['full_name' => 'X'])
         ->assertStatus(403);
 });
 
@@ -106,7 +106,7 @@ it('allows keeping the same employee_code on update (ignore-self in unique check
     $this->actingAs($this->admin);
     $this->patchJson("/api/v1/hrm/employees/{$this->employee->id}", [
         'employee_code' => 'E-EDIT', // same as current
-        'job_title' => 'Same Code OK',
+        'full_name' => 'Same Code OK',
     ])->assertOk();
 });
 
@@ -116,7 +116,7 @@ it('returns 404 cross-tenant — admin cannot update an employee in another tena
     $other = Employee::factory()->forCompany($otherCompany)->create();
 
     $this->actingAs($this->admin)
-        ->patchJson("/api/v1/hrm/employees/{$other->id}", ['job_title' => 'hijack'])
+        ->patchJson("/api/v1/hrm/employees/{$other->id}", ['full_name' => 'hijack'])
         ->assertStatus(404);
 });
 
@@ -125,7 +125,7 @@ it('returns 404 cross-company — admin in company X cannot update an employee i
     $other = Employee::factory()->forCompany($otherCompany)->create();
 
     $this->actingAs($this->admin)
-        ->patchJson("/api/v1/hrm/employees/{$other->id}", ['job_title' => 'hijack'])
+        ->patchJson("/api/v1/hrm/employees/{$other->id}", ['full_name' => 'hijack'])
         ->assertStatus(404);
 });
 
@@ -176,4 +176,55 @@ it('PATCH rejects 422 when department_id points at a foreign-company department'
 
     // Unchanged.
     expect($this->employee->fresh()->department_id)->toBeNull();
+});
+
+// ─── Position FK update scenarios (Positions slice cutover) ──────────────────
+
+it('PATCH position_id to a valid same-company position persists the FK', function (): void {
+    $position = Position::factory()
+        ->forCompany($this->company)
+        ->create(['code' => 'P-MGR', 'title' => 'Manager']);
+
+    $this->actingAs($this->admin);
+    $response = $this->patchJson("/api/v1/hrm/employees/{$this->employee->id}", [
+        'position_id' => $position->id,
+    ]);
+
+    $response->assertOk();
+    $response->assertJsonPath('data.position.id', $position->id);
+    $response->assertJsonPath('data.position.title', 'Manager');
+    expect($this->employee->fresh()->position_id)->toBe($position->id);
+});
+
+it('PATCH position_id to null clears the position', function (): void {
+    $position = Position::factory()
+        ->forCompany($this->company)
+        ->create();
+    $this->employee->forceFill(['position_id' => $position->id])->save();
+
+    $this->actingAs($this->admin);
+    $response = $this->patchJson("/api/v1/hrm/employees/{$this->employee->id}", [
+        'position_id' => null,
+    ]);
+
+    $response->assertOk();
+    $response->assertJsonPath('data.position', null);
+    expect($this->employee->fresh()->position_id)->toBeNull();
+});
+
+it('LOAD-BEARING: PATCH rejects 422 when position_id points at a foreign-company position', function (): void {
+    // Same load-bearing scoped-FK isolation guard as department_id.
+    // Without the Rule::exists where() clause on the FormRequest, this
+    // would persist a cross-company position id and silently leak.
+    $otherCompany = Company::factory()->forTenant($this->tenant)->create();
+    $foreignPosition = Position::factory()
+        ->forCompany($otherCompany)
+        ->create();
+
+    $this->actingAs($this->admin);
+    $this->patchJson("/api/v1/hrm/employees/{$this->employee->id}", [
+        'position_id' => $foreignPosition->id,
+    ])->assertStatus(422)->assertJsonValidationErrors('position_id');
+
+    expect($this->employee->fresh()->position_id)->toBeNull();
 });

@@ -23,7 +23,8 @@ final class UpdateEmployeeAction
      *     employee_code?: string,
      *     full_name?: string,
      *     email?: string|null,
-     *     job_title?: string|null,
+     *     department_id?: int|null,
+     *     position_id?: int|null,
      *     hire_date?: string,
      *     status?: string,
      * }  $data

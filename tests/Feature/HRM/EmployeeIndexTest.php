@@ -42,7 +42,7 @@ it('returns a paginated list of employees scoped to the current tenant + company
 
     $response->assertOk();
     $response->assertJsonStructure([
-        'data' => [['id', 'employee_code', 'full_name', 'job_title', 'hire_date', 'status']],
+        'data' => [['id', 'employee_code', 'full_name', 'position_title', 'hire_date', 'status']],
         'meta' => ['current_page', 'per_page', 'total'],
     ]);
     expect($response->json('data'))->toHaveCount(3);

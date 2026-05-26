@@ -28,7 +28,6 @@ class EmployeeResource extends JsonResource
             'employee_code' => $this->employee_code,
             'full_name' => $this->full_name,
             'email' => $this->email,
-            'job_title' => $this->job_title,
             // Nested department snapshot — flat array projection rather than
             // a nested DepartmentResource. Avoids over-fetching department
             // metadata (description, timestamps, status) into every employee
@@ -40,6 +39,17 @@ class EmployeeResource extends JsonResource
                     'id' => $this->department->id,
                     'code' => $this->department->code,
                     'name' => $this->department->name,
+                ]
+                : null,
+            // Nested position snapshot — same projection pattern as
+            // department. Replaces the old free-text job_title column
+            // (dropped in the Positions slice). Null when the employee
+            // has no current position OR the position row is soft-deleted.
+            'position' => $this->position
+                ? [
+                    'id' => $this->position->id,
+                    'code' => $this->position->code,
+                    'title' => $this->position->title,
                 ]
                 : null,
             'hire_date' => $this->hire_date->toDateString(),

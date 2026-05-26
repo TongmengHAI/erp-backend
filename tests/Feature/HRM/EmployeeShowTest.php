@@ -51,7 +51,7 @@ it('returns the full employee resource on a valid id within the current company'
     $response->assertJsonPath('data.full_name', 'Detail Subject');
     $response->assertJsonStructure([
         'data' => [
-            'id', 'employee_code', 'full_name', 'email', 'job_title',
+            'id', 'employee_code', 'full_name', 'email', 'position',
             'hire_date', 'status', 'created_at', 'updated_at',
         ],
     ]);
