@@ -26,6 +26,7 @@ use App\Models\User;
 use App\Support\Company\Actions\BackfillUsersToCompanyAction;
 use App\Support\Company\CompanyContext;
 use App\Support\Company\Enums\CompanyStatus;
+use App\Support\Company\Events\CompanyCreated;
 use App\Support\Tenancy\Enums\TenantStatus;
 use App\Support\Tenancy\TenantContext;
 use Illuminate\Database\Console\Seeds\WithoutModelEvents;
@@ -150,6 +151,16 @@ final class DemoUsersSeeder extends Seeder
                 'status' => CompanyStatus::Active,
             ],
         );
+
+        // The seeder uses WithoutModelEvents to suppress Auditable noise
+        // during the seed run — but that also suppresses the
+        // CompanyCreated event the HrmSettings bootstrap listener
+        // subscribes to. Dispatch manually on the just-created path so
+        // the listener gets to run and create the default hrm_settings
+        // row. Idempotent on re-seed via wasRecentlyCreated.
+        if ($acmeCompany->wasRecentlyCreated) {
+            CompanyCreated::dispatch($acmeCompany);
+        }
 
         // Route through the action rather than setting default_company_id
         // inline. Idempotent — on re-run, the user already has the binding
@@ -778,6 +789,12 @@ final class DemoUsersSeeder extends Seeder
                 'status' => CompanyStatus::Active,
             ],
         );
+
+        // Same CompanyCreated dispatch as Acme — the seeder's
+        // WithoutModelEvents trait would otherwise skip the listener.
+        if ($suspendedCompany->wasRecentlyCreated) {
+            CompanyCreated::dispatch($suspendedCompany);
+        }
 
         // Bind the suspended user to the company even though the tenant is
         // suspended — the binding is structural; the suspension is

@@ -127,6 +127,16 @@ final class DefaultPermissionsSeeder extends Seeder
             'hrm.leave_balance.create',
             'hrm.leave_balance.update',
             'hrm.leave_balance.delete',
+            // settings.* — top-level admin permission namespace, distinct
+            // from the {module}.{resource}.{action} domain permissions.
+            // settings.hrm.* governs the HRM settings page; future
+            // settings.accounting.*, settings.inventory.* etc. extend
+            // the same namespace as those modules' settings pages ship.
+            // Two perms in v1; the .view granted to both admin and
+            // viewer; the .update only to admin. See docs/admin.md for
+            // the full convention.
+            'settings.hrm.view',
+            'settings.hrm.update',
         ];
     }
 }

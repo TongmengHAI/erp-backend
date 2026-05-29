@@ -6,6 +6,7 @@ namespace App\Models;
 
 use App\Support\Audit\Concerns\Auditable;
 use App\Support\Company\Enums\CompanyStatus;
+use App\Support\Company\Events\CompanyCreated;
 use App\Support\Tenancy\Concerns\BelongsToTenant;
 use Database\Factories\CompanyFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -61,5 +62,25 @@ class Company extends Model
             'status' => CompanyStatus::class,
             'settings' => 'array',
         ];
+    }
+
+    /**
+     * Fire CompanyCreated when a Company row is inserted. Lets HRM,
+     * Accounting, Inventory, and other domains bootstrap per-company
+     * state (settings rows, default COA, etc.) via subscribed
+     * listeners without the Company model importing any domain code.
+     *
+     * Eloquent's `created` event fires AFTER the row is persisted, so
+     * `$company->id` is stable for the listener. Synchronous dispatch
+     * — listeners run in the same request. Migrations and seeders
+     *  fire this too (no withoutEvents in our seeder paths), which is
+     * the right behavior: the seed run should produce the same
+     * downstream state as a real Company creation would.
+     */
+    protected static function booted(): void
+    {
+        static::created(static function (Company $company): void {
+            CompanyCreated::dispatch($company);
+        });
     }
 }

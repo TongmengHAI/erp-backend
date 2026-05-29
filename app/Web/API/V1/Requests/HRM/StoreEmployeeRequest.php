@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Web\API\V1\Requests\HRM;
 
 use App\Domain\HRM\Enums\EmployeeStatus;
+use App\Domain\HRM\Services\HrmSettingsRepository;
 use App\Support\Company\CompanyContext;
 use App\Support\Tenancy\TenantContext;
 use Illuminate\Foundation\Http\FormRequest;
@@ -26,8 +27,15 @@ class StoreEmployeeRequest extends FormRequest
         $tenantId = app(TenantContext::class)->current()?->id;
         $companyId = app(CompanyContext::class)->current()?->id;
 
-        return [
-            'employee_code' => [
+        // Settings-driven employee_code rule: when auto-gen is on,
+        // the field is PROHIBITED (server generates; client must not
+        // send a value). When off, it's REQUIRED (current behavior).
+        // The repository's per-request cache means CreateEmployeeAction
+        // reads the same row from memory, no second query.
+        $settings = app(HrmSettingsRepository::class)->getForCurrentCompany();
+        $employeeCodeRule = $settings->auto_generate_employee_code
+            ? ['prohibited']
+            : [
                 'required',
                 'string',
                 'max:32',
@@ -38,7 +46,10 @@ class StoreEmployeeRequest extends FormRequest
                     ->where(fn ($q) => $q->where('tenant_id', $tenantId)
                         ->where('company_id', $companyId)
                         ->whereNull('deleted_at')),
-            ],
+            ];
+
+        return [
+            'employee_code' => $employeeCodeRule,
             'full_name' => ['required', 'string', 'max:255'],
             'email' => ['nullable', 'string', 'email', 'max:255'],
             // Department FK — LOAD-BEARING scoped-exists. The where() clause

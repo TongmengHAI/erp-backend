@@ -4,8 +4,11 @@ declare(strict_types=1);
 
 namespace App\Providers;
 
+use App\Domain\HRM\Listeners\BootstrapHrmSettingsListener;
+use App\Domain\HRM\Services\HrmSettingsRepository;
 use App\Support\Audit\AuditContext;
 use App\Support\Company\CompanyContext;
+use App\Support\Company\Events\CompanyCreated;
 use App\Support\Tenancy\TenantContext;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
@@ -31,12 +34,32 @@ class AppServiceProvider extends ServiceProvider
         // Don't gate on runningInConsole — Pest counts as console even when
         // actingAs($user) has populated Auth.
         $this->app->scoped(AuditContext::class, fn () => AuditContext::fromCurrentRequest());
+
+        // HrmSettingsRepository: per-request cache. `scoped` is request-
+        // lifetime in Laravel's container, so the singleton's in-memory
+        // cache lasts for one HTTP request / one Artisan command / one
+        // queue job and resets cleanly between. See the repository's
+        // own docblock for the cache invariant.
+        $this->app->scoped(HrmSettingsRepository::class);
     }
 
     public function boot(): void
     {
         $this->configureRateLimiters();
         $this->resetSpatieTeamIdBetweenQueueJobs();
+        $this->registerDomainEventListeners();
+    }
+
+    /**
+     * Subscribe domain listeners to cross-domain events. Centralised
+     * here in v1 because there's only one event/listener pair; if the
+     * surface grows past ~5 pairs, extract to a dedicated
+     * DomainEventServiceProvider.
+     */
+    private function registerDomainEventListeners(): void
+    {
+        // HRM listens for company bootstrap.
+        Event::listen(CompanyCreated::class, BootstrapHrmSettingsListener::class);
     }
 
     private function configureRateLimiters(): void

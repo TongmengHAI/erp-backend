@@ -95,6 +95,11 @@ final class DefaultRolesSeeder extends Seeder
                 'hrm.leave_balance.create',
                 'hrm.leave_balance.update',
                 'hrm.leave_balance.delete',
+                // settings.hrm.* — tenant_admin gets both; admins
+                // configure HRM behavior (auto-generate codes, default
+                // status, etc.) for their company.
+                'settings.hrm.view',
+                'settings.hrm.update',
             ],
             'accountant' => [
                 'accounting.journal_entry.view',
@@ -112,6 +117,9 @@ final class DefaultRolesSeeder extends Seeder
                 'hrm.position.view',
                 'hrm.branch.view',
                 'hrm.leave_balance.view',
+                // viewer can SEE settings (auditors need to understand
+                // how the system is configured) but cannot modify.
+                'settings.hrm.view',
             ],
         ];
     }

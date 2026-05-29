@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Web\API\V1\Controllers\Admin\HrmSettingsController;
 use App\Web\API\V1\Controllers\Auth\LoginController;
 use App\Web\API\V1\Controllers\Auth\LogoutController;
 use App\Web\API\V1\Controllers\Auth\MeController;
@@ -104,5 +105,20 @@ Route::middleware(['auth:sanctum', 'tenant', 'company'])->group(function (): voi
         // computed-state design discipline.
         Route::apiResource('leave-balances', LeaveBalanceController::class)
             ->parameters(['leave-balances' => 'leaveBalance']);
+    });
+
+    // Admin area — settings.* permissions; separate URL prefix
+    // (/api/v1/admin/...) so the admin surface is grep-distinct from
+    // the HRM business endpoints. Same auth+tenant+company middleware
+    // chain — admin is a different sidebar, not a different security
+    // boundary.
+    Route::prefix('admin/hrm')->group(function (): void {
+        // Single-resource shape: show + update only. No collection
+        // (settings is 1:1 with company); no destroy (settings always
+        // exist for every company via the bootstrap listener).
+        Route::get('settings', [HrmSettingsController::class, 'show'])
+            ->name('admin.hrm.settings.show');
+        Route::patch('settings/{settings}', [HrmSettingsController::class, 'update'])
+            ->name('admin.hrm.settings.update');
     });
 });

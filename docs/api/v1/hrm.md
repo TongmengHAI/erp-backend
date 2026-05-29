@@ -1183,6 +1183,56 @@ Audit rows are append-only at the DB level (immutability trigger). No HRM endpoi
 
 ---
 
+## Per-Company HRM Settings
+
+Per-company configuration for HRM behavior. One `hrm_settings` row per `(tenant_id, company_id)`. Created automatically on every Company creation by `BootstrapHrmSettingsListener` (subscribed to the `CompanyCreated` event fired from the Company model's `booted()` hook). Existing companies at deploy time are backfilled in the same migration that creates the table.
+
+**Settings shipped in v1:**
+
+| Field | Type | Default | Behavior |
+|---|---|---|---|
+| `auto_generate_employee_code` | boolean | `false` | When `true`, the Employee form omits `employee_code` and the backend generates `{prefix}{next_sequential}` server-side. When `false`, the user supplies `employee_code` manually (current behavior). |
+| `employee_code_prefix` | varchar(8), nullable | `null` | The prefix prepended to the auto-generated counter. Alphabet constrained to `[A-Z0-9_-]+`. **Required when `auto_generate_employee_code` is true** — enforced at three layers (Zod refinement, FormRequest closure, DB CHECK `hrm_settings_autogen_prefix_consistency_check`). |
+| `default_employee_status` | enum | `active` | Pre-fills the Employee form's status field on create. Enum values mirror `employees.status`. |
+
+**Settings deferred to future slices** (documented intent rather than backlog items):
+
+- **Minimum Employee Age** — requires a `birth_date` column on `employees` (separate slice). Without that column, an age-based validation has no input to validate against.
+- **Auto-Generated Display Name** — requires splitting `full_name` into `first_name` / `last_name`. The display-name composition rule (e.g. "Lastname, F.") needs structured name components; deferring until the split lands.
+
+### Storage architecture
+
+Two tables, distinct concerns:
+
+- **`hrm_settings`** — config (3 typed columns + tenant/company FKs + timestamps). Trait stack: `BelongsToTenant + BelongsToCompany + Auditable`. **No SoftDeletes** — settings are 1:1 with Company; a deleted company has no meaningful "restore settings" flow. Settings persist when Company is soft-deleted (the FK to `companies` is `restrictOnDelete`, not cascading on soft-delete); on Company restoration the prior settings row is still in place. Plain `UNIQUE (tenant_id, company_id)`, no partial-index `WHERE deleted_at IS NULL` since the row isn't soft-deletable.
+- **`hrm_employee_code_sequences`** — state (next-value counter). Lazy-initialized via `firstOrCreate` on first auto-gen use; companies that never enable auto-gen never get a row. No Auditable (would log noise on every Employee create), no SoftDeletes. Separate table from `hrm_settings` so the counter bump doesn't churn the Auditable trait on the settings row.
+
+### Auto-generation concurrency
+
+Two simultaneous `CreateEmployeeAction` calls in auto-gen mode MUST produce distinct codes. Safety story:
+
+1. `DB::transaction()` wraps the sequence read + the Employee insert atomically.
+2. `EmployeeCodeGenerator::next()` issues a `SELECT … FOR UPDATE` against the sequence row. The first transaction acquires the row lock; the second blocks until the first commits.
+3. The second transaction reads the incremented `next_value` after the lock releases, gets the next code.
+
+Encoded in `App\Domain\HRM\Support\EmployeeCodeGenerator`. The generator throws `RuntimeException` if invoked outside a transaction (the lock would silently no-op otherwise). The integration test `AutoGenerateEmployeeCodeTest::LOAD-BEARING` asserts two sequential creates produce `TT-1, TT-2` and the sequence row's `next_value` advances to `3`. Genuine concurrency verification is load-test territory (post-v1).
+
+### Behavior rules — confirmed in slice design
+
+- **Counter starts at 1** when auto-gen is first enabled. Next employee = `{prefix}1`, regardless of how many manually-coded employees existed before.
+- **Counter persists** if auto-gen is toggled off and back on. Sequence row is independent of the toggle state.
+- **Prefix change does not rename existing codes.** Existing auto-generated codes are historical data, untouched. New codes use the new prefix. Bulk rename is intentionally out of scope — employee codes are referenced outside the system (ID cards, payroll exports), so renaming en masse risks orphaned references. If a tenant needs a historical rename, it's a support-driven manual operation.
+- **Form impact** — when auto-gen is on, the Employee form omits the `employee_code` input; the FormRequest's rule for that field flips to `prohibited`. Sending `employee_code` in the auto-gen-on payload returns 422 errors.employee_code.
+- **Dirty-state on navigation** — the Settings page's dirty state is component-local; navigation away loses unsaved changes silently in v1. The "discard unsaved changes?" prompt is documented as future polish, not a missing feature.
+
+### Endpoints
+
+`GET /api/v1/admin/hrm/settings?company_id=X` — show. Returns the settings row for the given company; defaults to the current company when `?company_id` is absent. Cross-tenant / cross-company company_ids return 404 via the model's global scopes. **Permission:** `settings.hrm.view`.
+
+`PATCH /api/v1/admin/hrm/settings/{settings}` — update. Route-bound to the settings row (route key = id). Cross-field consistency (prefix required when auto-gen is on) checked via `withValidator`; surfaces 422 with `errors.employee_code_prefix`. **Permission:** `settings.hrm.update`.
+
+No create endpoint (settings always exist). No delete endpoint (settings persist for the company's lifetime).
+
 ## Out of scope (deferred)
 
 The following are **not** in the HRM module as shipped:
