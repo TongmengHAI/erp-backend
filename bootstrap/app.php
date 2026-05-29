@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Domain\Platform\Exceptions\ModuleNotEntitledException;
 use App\Models\Company;
 use App\Support\Audit\Console\CreateAuditPartitionsCommand;
 use App\Support\Company\Enums\CompanyStatus;
@@ -9,6 +10,8 @@ use App\Support\Company\Exceptions\CompanyContextMissingException;
 use App\Support\Company\Middleware\ResolveCompany;
 use App\Support\Tenancy\Exceptions\TenantInactiveException;
 use App\Support\Tenancy\Middleware\ResolveTenant;
+use App\Web\API\V1\Middleware\EnforceModuleEntitlement;
+use App\Web\API\V1\Middleware\SuperAdminGuard;
 use Illuminate\Auth\Middleware\Authenticate;
 use Illuminate\Auth\Middleware\Authorize;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
@@ -46,6 +49,15 @@ return Application::configure(basePath: dirname(__DIR__))
             // context apply the middleware stack ['auth:sanctum', 'tenant',
             // 'company']; opt out per-route via meta companyOptional=true.
             'company' => ResolveCompany::class,
+            // Module entitlement gate. Parameterized: 'module:hrm'. Runs
+            // AFTER 'tenant' — depends on TenantContext for the tenant
+            // being checked. Applied to module-prefixed route groups
+            // (hrm/* AND admin/hrm/* — tenant_admin can't see HRM
+            // Settings when HRM is disabled; only SA can re-enable).
+            'module' => EnforceModuleEntitlement::class,
+            // SA-only gate. Returns 404 (not 403) for non-SA users per
+            // Q8. Applied to the super-admin/* route group.
+            'super_admin' => SuperAdminGuard::class,
         ]);
 
         // Force SubstituteBindings (route-model binding) to run AFTER our
@@ -91,6 +103,21 @@ return Application::configure(basePath: dirname(__DIR__))
         // exception itself) because the exception is also thrown from
         // non-request contexts (CompanyScope, BelongsToCompany) where there
         // is no current user.
+        // Render ModuleNotEntitledException with error_code='module_not_entitled'
+        // plus the module key. The SPA shows a module-specific "disabled"
+        // screen ("HRM is disabled for your organisation").
+        $exceptions->render(function (ModuleNotEntitledException $e, Request $request) {
+            if (! $request->expectsJson()) {
+                return null;
+            }
+
+            return response()->json([
+                'message' => $e->getMessage(),
+                'error_code' => $e->errorCode,
+                'module' => $e->moduleKey,
+            ], $e->getStatusCode());
+        });
+
         $exceptions->render(function (CompanyContextMissingException $e, Request $request) {
             if (! $request->expectsJson()) {
                 return null;

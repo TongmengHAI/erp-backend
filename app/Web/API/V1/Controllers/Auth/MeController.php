@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Web\API\V1\Controllers\Auth;
 
+use App\Domain\Platform\Services\TenantEntitlementService;
 use App\Models\Company;
 use App\Models\User;
 use App\Support\Company\CompanyContext;
@@ -63,6 +64,12 @@ final class MeController extends Controller
                     'companies' => [],
                     'roles' => [],
                     'permissions' => [],
+                    // SA gates by user-type (is_super_admin), not by
+                    // entitlement. Empty array is correct — the SPA's
+                    // launcher filter for SA uses the superAdminOnly
+                    // field on LAUNCHER_APPS (Session 5), not the
+                    // entitled_modules array.
+                    'entitled_modules' => [],
                 ],
             ]);
         }
@@ -90,6 +97,15 @@ final class MeController extends Controller
                 'companies' => CompanyBriefResource::collection($companies),
                 'roles' => $user->getRoleNames()->values()->all(),
                 'permissions' => $user->getAllPermissions()->pluck('name')->values()->all(),
+                // Active module entitlement for this tenant. Drives the
+                // SPA's launcher filter (Session 5) — apps not in this
+                // array don't render in the launcher grid and route
+                // navigation into them returns 404 client-side. Source
+                // of truth for the API: EnforceModuleEntitlement
+                // middleware checks isEntitled() per request against the
+                // same service.
+                'entitled_modules' => app(TenantEntitlementService::class)
+                    ->entitledModuleKeysFor($tenant->id),
             ],
         ]);
     }

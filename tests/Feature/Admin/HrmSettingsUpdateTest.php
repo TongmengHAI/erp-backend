@@ -25,6 +25,10 @@ beforeEach(function (): void {
     ]);
     $this->admin->assignTenantRole($this->tenant, 'tenant_admin');
 
+    // Session 2 entitlement: admin/hrm/* requires an Active HRM
+    // tenant_modules row. The TenantFactory's afterCreating() hook
+    // grants it automatically, mirroring the production backfill.
+
     $this->settings = HrmSettings::query()
         ->withoutGlobalScopes()
         ->where('company_id', $this->company->id)

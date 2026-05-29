@@ -15,6 +15,7 @@ declare(strict_types=1);
 //     Laravel's throttle middleware is itself well-tested.
 // ─────────────────────────────────────────────────────────────────────────────
 
+use App\Domain\Platform\Models\TenantModule;
 use App\Models\Company;
 use App\Models\Tenant;
 use App\Models\User;
@@ -99,6 +100,11 @@ it('returns user + tenant + current_company + companies + roles + permissions fo
                 'accounting.journal_entry.view',
                 'accounting.journal_entry.create',
             ],
+            // TenantFactory's afterCreating() hook auto-grants Active
+            // HRM entitlement (mirrors production migration backfill);
+            // the entitled_modules array reflects that. Tests that
+            // need a non-entitled tenant call ->withoutEntitlement().
+            'entitled_modules' => ['hrm'],
         ],
     ]);
 });
@@ -157,7 +163,7 @@ it('payload contains exactly { user, tenant, current_company, companies, roles, 
     $body = $this->getJson('/api/v1/auth/me')->json();
 
     expect(array_keys($body))->toBe(['data']);
-    expect(array_keys($body['data']))->toEqualCanonicalizing(['user', 'tenant', 'current_company', 'companies', 'roles', 'permissions']);
+    expect(array_keys($body['data']))->toEqualCanonicalizing(['user', 'tenant', 'current_company', 'companies', 'roles', 'permissions', 'entitled_modules']);
     expect($body['data']['user'])->not->toHaveKey('password');
     expect($body['data']['user'])->not->toHaveKey('remember_token');
     expect($body['data']['user'])->not->toHaveKey('tenant_id');
@@ -311,8 +317,59 @@ it('returns the SA-shape response for a super_admin user (null tenant + null com
             'companies' => [],
             'roles' => [],
             'permissions' => [],
+            'entitled_modules' => [],
         ],
     ]);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// entitled_modules tests (Session 2 — tenant_modules schema + enforcement)
+// ─────────────────────────────────────────────────────────────────────────────
+
+it('entitled_modules contains [hrm] when tenant has an Active HRM entitlement', function (): void {
+    // TenantFactory's afterCreating() auto-grants Active HRM, mirroring
+    // the migration backfill — no manual TenantModule creation needed.
+    $tenant = Tenant::factory()->create();
+    $company = Company::factory()->forTenant($tenant)->create();
+    $user = User::factory()->forTenant($tenant)->create([
+        'default_company_id' => $company->id,
+        'current_company_id' => $company->id,
+    ]);
+    $user->assignTenantRole($tenant, 'tenant_admin');
+
+    $this->actingAs($user);
+
+    $response = $this->getJson('/api/v1/auth/me')->assertOk();
+    expect($response->json('data.entitled_modules'))->toBe(['hrm']);
+});
+
+it('entitled_modules is [] when tenant has only Disabled or NO entitlement rows', function (): void {
+    // Opt out of the factory default Active row; then create a
+    // Disabled row to exercise the [] case.
+    $tenant = Tenant::factory()->withoutEntitlement()->create();
+    $company = Company::factory()->forTenant($tenant)->create();
+    $user = User::factory()->forTenant($tenant)->create([
+        'default_company_id' => $company->id,
+        'current_company_id' => $company->id,
+    ]);
+    $user->assignTenantRole($tenant, 'tenant_admin');
+
+    TenantModule::factory()->forTenant($tenant)->disabled()->create();
+
+    $this->actingAs($user);
+
+    // /auth/me is on 'company:optional' (no entitlement gate); the
+    // entitled_modules array reflects the disabled state with [].
+    $response = $this->getJson('/api/v1/auth/me')->assertOk();
+    expect($response->json('data.entitled_modules'))->toBe([]);
+});
+
+it('entitled_modules is [] for super_admin (SA gates by user-type, not entitlement)', function (): void {
+    $sa = User::factory()->superAdmin()->create();
+    $this->actingAs($sa);
+
+    $response = $this->getJson('/api/v1/auth/me')->assertOk();
+    expect($response->json('data.entitled_modules'))->toBe([]);
 });
 
 it('SA payload shape does not leak any tenant or company data even when other tenants exist in the DB', function (): void {

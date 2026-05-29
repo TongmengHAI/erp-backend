@@ -15,6 +15,7 @@ use App\Web\API\V1\Controllers\HRM\LeaveBalanceController;
 use App\Web\API\V1\Controllers\HRM\LeaveRequestController;
 use App\Web\API\V1\Controllers\HRM\PositionController;
 use App\Web\API\V1\Controllers\HRM\RejectLeaveRequestController;
+use App\Web\API\V1\Controllers\SuperAdmin\TenantModuleController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/health', fn () => [
@@ -55,7 +56,12 @@ Route::middleware(['auth:sanctum', 'tenant', 'company:optional'])->group(functio
 // `company` middleware (no parameter) throws company_required when no
 // company resolves — these endpoints require a chosen company to run.
 Route::middleware(['auth:sanctum', 'tenant', 'company'])->group(function (): void {
-    Route::prefix('hrm')->group(function (): void {
+    // HRM business endpoints — gated on tenant_modules entitlement for
+    // the 'hrm' module. tenant_admin can't self-rescue by re-enabling
+    // via settings; admin/hrm/* (below) carries the same gate.
+    // EnforceModuleEntitlement bypasses for super_admin (same pattern
+    // as TenantScope/CompanyScope/ResolveTenant/ResolveCompany bypasses).
+    Route::middleware('module:hrm')->prefix('hrm')->group(function (): void {
         Route::apiResource('employees', EmployeeController::class)
             ->parameters(['employees' => 'employee']);
         Route::apiResource('departments', DepartmentController::class)
@@ -111,8 +117,10 @@ Route::middleware(['auth:sanctum', 'tenant', 'company'])->group(function (): voi
     // (/api/v1/admin/...) so the admin surface is grep-distinct from
     // the HRM business endpoints. Same auth+tenant+company middleware
     // chain — admin is a different sidebar, not a different security
-    // boundary.
-    Route::prefix('admin/hrm')->group(function (): void {
+    // boundary. The module:hrm gate is the SAME as on /hrm/* — when
+    // HRM is disabled the tenant_admin loses the ability to configure
+    // it (only SA can re-enable; tenant_admin can't self-rescue).
+    Route::middleware('module:hrm')->prefix('admin/hrm')->group(function (): void {
         // Single-resource shape: show + update only. No collection
         // (settings is 1:1 with company); no destroy (settings always
         // exist for every company via the bootstrap listener).
@@ -121,4 +129,21 @@ Route::middleware(['auth:sanctum', 'tenant', 'company'])->group(function (): voi
         Route::patch('settings/{settings}', [HrmSettingsController::class, 'update'])
             ->name('admin.hrm.settings.update');
     });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Super Admin (vendor-side) endpoints — gated on user.type='super_admin'.
+// No 'tenant' / 'company' middleware: SA has no tenant or company context.
+// SuperAdminGuard returns 404 (not 403) for non-SA authenticated users
+// per Q8 — the route effectively doesn't exist for them.
+//
+// Session 2 ships: tenant-modules index + sync. Session 3 adds the rest of
+// the SA endpoints (tenant CRUD + dashboard).
+// ─────────────────────────────────────────────────────────────────────────────
+Route::middleware(['auth:sanctum', 'super_admin'])->prefix('super-admin')->group(function (): void {
+    // Per-tenant module entitlement.
+    Route::get('tenants/{tenant}/modules', [TenantModuleController::class, 'index'])
+        ->name('super-admin.tenants.modules.index');
+    Route::patch('tenants/{tenant}/modules', [TenantModuleController::class, 'sync'])
+        ->name('super-admin.tenants.modules.sync');
 });
