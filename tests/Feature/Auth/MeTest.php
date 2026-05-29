@@ -64,6 +64,8 @@ it('returns user + tenant + current_company + companies + roles + permissions fo
                 'name' => $user->name,
                 'email' => $user->email,
                 'email_verified_at' => $user->email_verified_at?->toIso8601String(),
+                'type' => 'tenant_user',
+                'is_super_admin' => false,
             ],
             'tenant' => [
                 'id' => $tenant->id,
@@ -274,4 +276,61 @@ it('reflects role grants scoped via Spatie teams — different role per tenant r
 
     // No tenant_admin permission leaked.
     expect($response->json('data.permissions'))->not->toContain('tenant.settings.manage');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Super Admin /me shape tests — confirm SA gets the SA-specific response
+// (null tenant, null current_company, empty companies/roles/permissions
+// arrays) while regular tenant_users get the existing shape (regression
+// covered by the very first test above).
+// ─────────────────────────────────────────────────────────────────────────────
+
+it('returns the SA-shape response for a super_admin user (null tenant + null company + empty arrays)', function (): void {
+    $sa = User::factory()->superAdmin()->create([
+        'name' => 'Vendor Ops',
+        'email' => 'ops@myerp.local',
+    ]);
+
+    $this->actingAs($sa);
+
+    $response = $this->getJson('/api/v1/auth/me');
+
+    $response->assertOk();
+    $response->assertExactJson([
+        'data' => [
+            'user' => [
+                'id' => $sa->id,
+                'name' => 'Vendor Ops',
+                'email' => 'ops@myerp.local',
+                'email_verified_at' => $sa->email_verified_at?->toIso8601String(),
+                'type' => 'super_admin',
+                'is_super_admin' => true,
+            ],
+            'tenant' => null,
+            'current_company' => null,
+            'companies' => [],
+            'roles' => [],
+            'permissions' => [],
+        ],
+    ]);
+});
+
+it('SA payload shape does not leak any tenant or company data even when other tenants exist in the DB', function (): void {
+    // Cross-tenant guard for SA. With tenants populated, the SA's /me
+    // must STILL show tenant=null, companies=[] — the SA's identity is
+    // platform-level, not tenant-level. Distinct from "SA can SEE all
+    // tenants via tenant CRUD endpoints (Sessions 2-3)" — /me is about
+    // the SA's OWN session shape.
+    Tenant::factory()->create(['name' => 'Other Tenant 1']);
+    Tenant::factory()->create(['name' => 'Other Tenant 2']);
+
+    $sa = User::factory()->superAdmin()->create();
+    $this->actingAs($sa);
+
+    $response = $this->getJson('/api/v1/auth/me')->assertOk();
+
+    expect($response->json('data.tenant'))->toBeNull();
+    expect($response->json('data.companies'))->toBe([]);
+    expect(json_encode($response->json()))->not->toContain('Other Tenant 1');
+    expect(json_encode($response->json()))->not->toContain('Other Tenant 2');
 });

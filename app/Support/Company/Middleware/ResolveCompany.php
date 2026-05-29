@@ -74,6 +74,19 @@ final class ResolveCompany
         $user = $request->user();
         $tenant = $this->tenantContext->current();
 
+        // Super-admin bypass. SA users have all four tenant/company FK
+        // columns NULL by composite DB CHECK — walking the 5-branch
+        // resolution chain would land at Step 5 and throw
+        // company_required, blocking SA from ever reaching routes on the
+        // `'company'` middleware group. The bypass leaves CompanyContext
+        // unset; downstream code paths use CompanyScope's analogous SA
+        // bypass or `acrossCompanies()` to operate without a pinned
+        // company. Mirrors the ResolveTenant SA bypass and the
+        // TenantScope SA early-out — three places, one rule.
+        if ($user instanceof User && $user->isSuperAdmin()) {
+            return $next($request);
+        }
+
         // No authenticated user, or no resolved tenant — nothing to resolve
         // against. Company-scoped queries that follow will throw via the
         // global scope (fail-loud), as designed.

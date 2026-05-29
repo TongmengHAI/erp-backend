@@ -6,6 +6,7 @@ namespace Database\Seeders;
 
 use Database\Seeders\Framework\DefaultPermissionsSeeder;
 use Database\Seeders\Framework\DefaultRolesSeeder;
+use Database\Seeders\Framework\SuperAdminSeeder;
 use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
 
@@ -20,6 +21,11 @@ class DatabaseSeeder extends Seeder
         $this->call([
             DefaultPermissionsSeeder::class,
             DefaultRolesSeeder::class,
+            // SuperAdminSeeder is dev-only (gated to local/testing via
+            // RuntimeException on the wrong environment). Wires the
+            // canonical local SA user (superadmin@myerp.local / superadmin).
+            // Production SA creation uses `php artisan super-admin:create`.
+            SuperAdminSeeder::class,
         ]);
 
         // (Country templates / demo tenant seeders run from explicit artisan

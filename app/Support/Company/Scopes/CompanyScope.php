@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace App\Support\Company\Scopes;
 
+use App\Models\User;
 use App\Support\Company\CompanyContext;
 use App\Support\Company\Exceptions\CompanyContextMissingException;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Scope;
+use Illuminate\Support\Facades\Auth;
 
 /**
  * Global Eloquent scope that injects `WHERE company_id = :current_company_id`
@@ -18,6 +20,7 @@ use Illuminate\Database\Eloquent\Scope;
  *
  * Behaviour:
  *  - inside CompanyContext::acrossCompanies() → no scope applied (intentional bypass)
+ *  - authenticated super-admin user            → no scope applied (vendor-side bypass)
  *  - no company set otherwise                  → throws CompanyContextMissingException (fail loud per §G)
  *  - company set                               → adds the WHERE clause, qualified by the model's table
  */
@@ -28,6 +31,14 @@ final class CompanyScope implements Scope
         $context = app(CompanyContext::class);
 
         if ($context->inAcrossCompaniesMode()) {
+            return;
+        }
+
+        // Super-admin bypass — mirrors TenantScope. SA users have no
+        // company_id by composite DB CHECK; their platform-side reads
+        // legitimately cross tenants AND companies.
+        $authUser = Auth::user();
+        if ($authUser instanceof User && $authUser->isSuperAdmin()) {
             return;
         }
 

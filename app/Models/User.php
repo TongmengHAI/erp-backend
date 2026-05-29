@@ -6,6 +6,7 @@ namespace App\Models;
 
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
 use App\Support\Audit\Concerns\Auditable;
+use App\Support\Identity\Enums\UserType;
 use App\Support\Tenancy\Concerns\HasTenantRoles;
 use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -25,6 +26,7 @@ use Spatie\Permission\Traits\HasRoles;
  * @property string $email
  * @property Carbon|null $email_verified_at
  * @property string $password
+ * @property UserType $type
  * @property string|null $remember_token
  *
  * @todo Add `locale` column (default 'en', accepts 'km') when Khmer translation
@@ -59,6 +61,7 @@ class User extends Authenticatable
         'current_tenant_id',
         'default_company_id',
         'current_company_id',
+        'type',
     ];
 
     /** @var list<string> */
@@ -73,7 +76,28 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
+            'type' => UserType::class,
         ];
+    }
+
+    /**
+     * Whether this user is a vendor-side platform operator (no tenant, no
+     * company, implicit access to /super-admin endpoints). The single
+     * source of truth for SA gating across:
+     *   - TenantScope global scope (skips the WHERE tenant_id = X)
+     *   - ResolveTenant middleware (skips tenant resolution + status check)
+     *   - ResolveCompany middleware (skips the 5-branch company resolution)
+     *   - UserResource (surfaces type + is_super_admin to the SPA)
+     *   - MeController (returns null tenant / company for SA)
+     *   - Future SuperAdminGuard middleware (404 for non-SA on /super-admin)
+     *
+     * Composite DB CHECK guarantees: if isSuperAdmin() is true, the
+     * tenant_id / current_tenant_id / default_company_id / current_company_id
+     * columns are all NULL.
+     */
+    public function isSuperAdmin(): bool
+    {
+        return $this->type === UserType::SuperAdmin;
     }
 
     /**

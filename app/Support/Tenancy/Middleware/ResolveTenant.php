@@ -46,7 +46,15 @@ final class ResolveTenant
     {
         $user = $request->user();
 
-        if ($user instanceof User) {
+        // Super-admin bypass. SA users carry no tenant_id by composite DB
+        // CHECK — calling resolveFor() would throw TenantAccessDeniedException
+        // (both tenant_id and current_tenant_id null → "no resolvable tenant").
+        // The bypass leaves TenantContext unset; downstream code paths use
+        // TenantScope's SA bypass or `asSystem()` to operate without a pinned
+        // tenant. Spatie's PermissionRegistrar is also intentionally left
+        // unset — SA gating is via the user-type flag (SuperAdminGuard
+        // middleware in Session 2), not via Spatie permissions.
+        if ($user instanceof User && ! $user->isSuperAdmin()) {
             $tenant = $this->resolveFor($user);
             $this->context->setCurrent($tenant);
             $this->registrar->setPermissionsTeamId($tenant->id);

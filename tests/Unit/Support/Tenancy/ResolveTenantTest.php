@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use App\Models\Tenant;
 use App\Models\User;
+use App\Support\Identity\Enums\UserType;
 use App\Support\Tenancy\Exceptions\TenantAccessDeniedException;
 use App\Support\Tenancy\Exceptions\TenantInactiveException;
 use App\Support\Tenancy\Middleware\ResolveTenant;
@@ -46,12 +47,20 @@ it('passes through unauthenticated requests without setting the context', functi
 });
 
 it('throws 403 TenantAccessDeniedException when user has neither tenant_id nor current_tenant_id', function (): void {
-    $tenant = Tenant::factory()->create();
-    $user = User::factory()->forTenant($tenant)->create();
-    // Explicitly null both — simulate an orphaned system user.
-    $user->forceFill(['tenant_id' => null, 'current_tenant_id' => null])->save();
+    // The composite DB CHECK 'users_tenant_user_has_tenant_check' added
+    // in Session 1 makes this orphan state unreachable via normal Eloquent
+    // flows — a persisted tenant_user with NULL tenant_id rejects at the
+    // DB layer. The defensive throw in ResolveTenant::resolveFor still
+    // exists as a runtime guard (against e.g. partial-migration state),
+    // and we exercise it here by constructing the User in-memory without
+    // persisting. runMiddleware doesn't touch the DB on the user side —
+    // it sets the request's user resolver to the in-memory instance.
+    $user = new User;
+    $user->tenant_id = null;
+    $user->current_tenant_id = null;
+    $user->type = UserType::TenantUser;
 
-    expect(fn () => runMiddleware($user->fresh()))
+    expect(fn () => runMiddleware($user))
         ->toThrow(TenantAccessDeniedException::class, 'has no resolvable tenant');
 });
 

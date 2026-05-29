@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use App\Models\Tenant;
 use App\Models\User;
+use App\Support\Identity\Enums\UserType;
 use Spatie\Permission\Models\Permission;
 use Spatie\Permission\Models\Role;
 use Spatie\Permission\PermissionRegistrar;
@@ -94,9 +95,14 @@ it('defaultTenant returns the user home tenant', function (): void {
 });
 
 it('defaultTenant returns null when the user has no home tenant', function (): void {
-    $home = Tenant::factory()->create();
-    $user = User::factory()->forTenant($home)->create();
-    $user->forceFill(['tenant_id' => null])->save();
+    // Same shape as the orphan-user case in ResolveTenantTest: the
+    // composite DB CHECK 'users_tenant_user_has_tenant_check' (Session 1)
+    // makes a persisted tenant_user with NULL tenant_id unreachable.
+    // defaultTenant()'s null-safe branch still exists as a runtime guard;
+    // we exercise it by constructing the User in-memory without persisting.
+    $user = new User;
+    $user->tenant_id = null;
+    $user->type = UserType::TenantUser;
 
-    expect($user->fresh()->defaultTenant())->toBeNull();
+    expect($user->defaultTenant())->toBeNull();
 });

@@ -47,6 +47,26 @@ final class MeController extends Controller
             throw new LogicException('User expected on a route protected by auth:sanctum.');
         }
 
+        // Super-admin shape. SA users have no tenant + no company by
+        // composite DB CHECK; the ResolveTenant + ResolveCompany
+        // middlewares short-circuited for them, so the contexts are
+        // unset. Return null/empty for the tenant-scoped fields. Roles
+        // and permissions remain empty arrays — SA gating is via the
+        // user-type flag (UserResource.is_super_admin = true), not via
+        // Spatie permissions.
+        if ($user->isSuperAdmin()) {
+            return response()->json([
+                'data' => [
+                    'user' => new UserResource($user),
+                    'tenant' => null,
+                    'current_company' => null,
+                    'companies' => [],
+                    'roles' => [],
+                    'permissions' => [],
+                ],
+            ]);
+        }
+
         $tenant = app(TenantContext::class)->current();
         if ($tenant === null) {
             throw new LogicException('Tenant expected on a route protected by ResolveTenant.');
