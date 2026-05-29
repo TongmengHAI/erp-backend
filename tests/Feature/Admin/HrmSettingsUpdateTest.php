@@ -125,6 +125,41 @@ it('returns 404 cross-tenant — admin cannot update another tenant\'s settings 
         ->assertStatus(404);
 });
 
+it('LOAD-BEARING: DB CHECK constraint rejects a raw INSERT with auto-gen=true and prefix=null', function (): void {
+    // INSERT path companion to the UPDATE path test below. Together
+    // they pin the third defensive layer: the composite CHECK fires on
+    // either write path. Same regression-protection shape as the
+    // leave_requests day_part single-date check.
+    //
+    // Fresh tenant+company so we have a clean slate; the bootstrap
+    // listener will have already created a default settings row for
+    // the new company, so we delete that first to avoid tripping the
+    // unique index before the CHECK.
+    $tenant = Tenant::factory()->create();
+    $company = Company::factory()->forTenant($tenant)->create();
+    DB::table('hrm_settings')->where('company_id', $company->id)->delete();
+
+    $thrown = false;
+    try {
+        DB::table('hrm_settings')->insert([
+            'tenant_id' => $tenant->id,
+            'company_id' => $company->id,
+            'auto_generate_employee_code' => true, // ← inconsistent with prefix below
+            'employee_code_prefix' => null,
+            'default_employee_status' => 'active',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+    } catch (QueryException $e) {
+        $thrown = true;
+        expect($e->getMessage())->toContain('hrm_settings_autogen_prefix_consistency_check');
+    }
+
+    expect($thrown)->toBeTrue(
+        'Expected the composite CHECK constraint to reject the inconsistent raw INSERT.',
+    );
+});
+
 it('LOAD-BEARING: DB CHECK constraint rejects a raw UPDATE with auto-gen=true and prefix=null', function (): void {
     // Bypass the model + FormRequest entirely — raw DB::table()->update()
     // skips both layers. This proves the composite CHECK fires regardless
