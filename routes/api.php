@@ -15,6 +15,7 @@ use App\Web\API\V1\Controllers\HRM\LeaveBalanceController;
 use App\Web\API\V1\Controllers\HRM\LeaveRequestController;
 use App\Web\API\V1\Controllers\HRM\PositionController;
 use App\Web\API\V1\Controllers\HRM\RejectLeaveRequestController;
+use App\Web\API\V1\Controllers\SuperAdmin\TenantController;
 use App\Web\API\V1\Controllers\SuperAdmin\TenantModuleController;
 use Illuminate\Support\Facades\Route;
 
@@ -141,7 +142,19 @@ Route::middleware(['auth:sanctum', 'tenant', 'company'])->group(function (): voi
 // the SA endpoints (tenant CRUD + dashboard).
 // ─────────────────────────────────────────────────────────────────────────────
 Route::middleware(['auth:sanctum', 'super_admin'])->prefix('super-admin')->group(function (): void {
-    // Per-tenant module entitlement.
+    // Tenant CRUD (Session 3). update covers profile + status transitions
+    // (suspend/resume via PATCH status). No destroy in v1 per the
+    // explicit cuts (cascade complexity is a separate slice).
+    Route::get('tenants', [TenantController::class, 'index'])
+        ->name('super-admin.tenants.index');
+    Route::post('tenants', [TenantController::class, 'store'])
+        ->name('super-admin.tenants.store');
+    Route::get('tenants/{tenant}', [TenantController::class, 'show'])
+        ->name('super-admin.tenants.show');
+    Route::patch('tenants/{tenant}', [TenantController::class, 'update'])
+        ->name('super-admin.tenants.update');
+
+    // Per-tenant module entitlement (Session 2).
     Route::get('tenants/{tenant}/modules', [TenantModuleController::class, 'index'])
         ->name('super-admin.tenants.modules.index');
     Route::patch('tenants/{tenant}/modules', [TenantModuleController::class, 'sync'])

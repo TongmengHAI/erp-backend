@@ -10,6 +10,7 @@ use Database\Factories\TenantFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Carbon;
 
 /**
  * @property int $id
@@ -22,6 +23,9 @@ use Illuminate\Database\Eloquent\SoftDeletes;
  * @property string $timezone
  * @property TenantStatus $status
  * @property array<string, mixed>|null $settings
+ * @property Carbon $created_at
+ * @property Carbon $updated_at
+ * @property Carbon|null $deleted_at
  */
 class Tenant extends Model
 {
