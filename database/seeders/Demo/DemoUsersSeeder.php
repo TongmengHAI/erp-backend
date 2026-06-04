@@ -900,9 +900,16 @@ final class DemoUsersSeeder extends Seeder
         // sees this user, so the user.default_company_id is dormant.
         app(BackfillUsersToCompanyAction::class)->execute($suspendedCompany);
 
-        // No role assignment for the suspended user — the suspension path
-        // is intercepted at /auth/me before permission resolution happens.
-        unset($suspendedUser);
+        // Assign tenant_admin so the user has working permissions once
+        // the SA resumes the tenant. The suspension gate at /auth/me
+        // fires BEFORE permission resolution, so this assignment does
+        // not weaken the suspended-path test (login → /auth/me 401
+        // tenant_inactive still holds). The role only matters AFTER a
+        // resume — without it, a resumed user lands on "No accessible
+        // apps" because accessibleApps' permission-prefix filter rejects
+        // every app for a roleless user. Mirrors admin@acme.test's
+        // role; scoped to this tenant only.
+        $suspendedUser->assignTenantRole($suspendedTenant, 'tenant_admin');
 
         // HRM entitlement for the suspended tenant — makes "Tenants per
         // module" dashboard tile count the full estate (suspended tenants
