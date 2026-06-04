@@ -31,6 +31,7 @@ declare(strict_types=1);
 
 use App\Models\Tenant;
 use App\Models\User;
+use App\Support\Identity\Enums\UserType;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\RateLimiter;
@@ -194,6 +195,44 @@ it('returns 429 once the per-IP+email rate limit is exceeded', function (): void
         'email' => $user->email,
         'password' => 'wrong',
     ])->assertStatus(429);
+});
+
+it('LOAD-BEARING: super admin (tenant_id=NULL) authenticates and the response carries tenant: null', function (): void {
+    // SAs are vendor-side operators with NO tenant FK. The composite
+    // users_super_admin_no_tenant_or_company_check DB constraint enforces
+    // tenant_id IS NULL for type='super_admin'. The login path must treat
+    // $tenant === null as the expected SA shape — not a broken FK.
+    //
+    // This test pins the contract: SA login succeeds, response.tenant is
+    // literally null (not absent, not a tenant payload), and Auth::guard
+    // is populated. A regression that re-introduces the "$tenant === null
+    // → 401" predicate fails this test loudly.
+    $sa = User::query()->create([
+        'name' => 'Vendor Ops',
+        'email' => 'ops@myerp.local',
+        'password' => Hash::make('super-secret'),
+        'email_verified_at' => now(),
+        'type' => UserType::SuperAdmin,
+        // tenant_id, current_tenant_id, default_company_id, current_company_id
+        // all left null — the composite CHECK constraint demands it.
+    ]);
+
+    $response = $this->postJson('/api/v1/auth/login', [
+        'email' => $sa->email,
+        'password' => 'super-secret',
+    ]);
+
+    $response->assertOk();
+    $response->assertJsonPath('data.user.id', $sa->id);
+    $response->assertJsonPath('data.user.is_super_admin', true);
+    // tenant is literally null in the JSON body — distinguishable from
+    // "missing key" by JsonPath matching against null.
+    $response->assertJsonPath('data.tenant', null);
+    expect(auth('web')->id())->toBe($sa->id);
+
+    // current_tenant_id never gets a non-null write for an SA — the
+    // composite CHECK constraint would reject it.
+    expect($sa->fresh()->current_tenant_id)->toBeNull();
 });
 
 it('the response payload shape matches { user, tenant } and excludes sensitive fields', function (): void {

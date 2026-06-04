@@ -6,6 +6,7 @@ namespace App\Web\API\V1\Controllers\Auth;
 
 use App\Models\Tenant;
 use App\Models\User;
+use App\Support\Identity\Enums\UserType;
 use App\Web\API\V1\Controllers\Controller;
 use App\Web\API\V1\Requests\Auth\LoginRequest;
 use App\Web\API\V1\Resources\TenantResource;
@@ -90,9 +91,22 @@ final class LoginController extends Controller
         // a hard-deleted tenant — impossible under ON DELETE RESTRICT,
         // defensive anyway). Suspended / archived tenants authenticate
         // and are caught by ResolveTenant on the next request.
+        //
+        // SUPER ADMIN EXCEPTION: SAs are vendor-side operators with NO
+        // tenant FK (tenant_id is NULL by design, enforced by the
+        // composite users_super_admin_no_tenant_or_company_check DB
+        // constraint). For them, $tenant === null is the expected
+        // shape — not a broken FK. The validation predicate below
+        // permits the SA path; the response carries tenant: null.
+        // The Tenant::find call still ran above, so timing is the same
+        // as a tenant_user with a valid FK.
         $tenant = Tenant::query()->find($tenantId);
 
-        if ($user === null || ! $passwordOk || $tenant === null) {
+        $isSuperAdmin = $user !== null && $user->type === UserType::SuperAdmin;
+
+        $tenantOk = $tenant !== null || $isSuperAdmin;
+
+        if ($user === null || ! $passwordOk || ! $tenantOk) {
             // Single generic error. Same body, same status, same response time as
             // every other failure branch — no info leak about which check failed.
             throw ValidationException::withMessages([
@@ -103,7 +117,12 @@ final class LoginController extends Controller
         // Reset current_tenant_id to home tenant on every login — no "remember
         // last tenant" state survives logout. Slice 6 will populate this column
         // when a multi-tenant user explicitly switches.
-        if ($user->current_tenant_id !== $user->tenant_id) {
+        //
+        // Skip for SAs — they have NULL tenant_id and NULL current_tenant_id;
+        // writing tenant_id (null) back into current_tenant_id (also null) is a
+        // no-op, but the composite users_super_admin_no_tenant_or_company_check
+        // already constrains both to NULL so we don't touch the row at all.
+        if (! $isSuperAdmin && $user->current_tenant_id !== $user->tenant_id) {
             $user->forceFill(['current_tenant_id' => $user->tenant_id])->save();
         }
 
@@ -113,7 +132,11 @@ final class LoginController extends Controller
         return response()->json([
             'data' => [
                 'user' => new UserResource($user),
-                'tenant' => new TenantResource($tenant),
+                // SAs have no home tenant — `tenant` is null in their
+                // login payload. The frontend's useAuthStore + the SA
+                // route guard already treat tenant=null + is_super_admin
+                // as the valid SA shape.
+                'tenant' => $tenant !== null ? new TenantResource($tenant) : null,
             ],
         ]);
     }
