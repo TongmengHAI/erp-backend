@@ -15,6 +15,7 @@ use App\Web\API\V1\Controllers\HRM\LeaveBalanceController;
 use App\Web\API\V1\Controllers\HRM\LeaveRequestController;
 use App\Web\API\V1\Controllers\HRM\PositionController;
 use App\Web\API\V1\Controllers\HRM\RejectLeaveRequestController;
+use App\Web\API\V1\Controllers\SuperAdmin\DashboardController;
 use App\Web\API\V1\Controllers\SuperAdmin\TenantController;
 use App\Web\API\V1\Controllers\SuperAdmin\TenantModuleController;
 use Illuminate\Support\Facades\Route;
@@ -142,6 +143,10 @@ Route::middleware(['auth:sanctum', 'tenant', 'company'])->group(function (): voi
 // the SA endpoints (tenant CRUD + dashboard).
 // ─────────────────────────────────────────────────────────────────────────────
 Route::middleware(['auth:sanctum', 'super_admin'])->prefix('super-admin')->group(function (): void {
+    // Dashboard (Session 4). Single endpoint; 5 metrics + 2 lists per Q6.
+    Route::get('dashboard', DashboardController::class)
+        ->name('super-admin.dashboard');
+
     // Tenant CRUD (Session 3). update covers profile + status transitions
     // (suspend/resume via PATCH status). No destroy in v1 per the
     // explicit cuts (cascade complexity is a separate slice).

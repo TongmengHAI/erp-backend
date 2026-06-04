@@ -20,6 +20,8 @@ use App\Domain\HRM\Models\LeaveBalance;
 use App\Domain\HRM\Models\LeaveRequest;
 use App\Domain\HRM\Models\Position;
 use App\Domain\HRM\Support\LeaveDaysCalculator;
+use App\Domain\Platform\Enums\ModuleStatus;
+use App\Domain\Platform\Models\TenantModule;
 use App\Models\Company;
 use App\Models\Tenant;
 use App\Models\User;
@@ -170,6 +172,12 @@ final class DemoUsersSeeder extends Seeder
         // Idempotent role assignment scoped to the Acme tenant. HasTenantRoles
         // sets Spatie's team_id for the call and restores it on exit.
         $admin->assignTenantRole($acmeTenant, 'tenant_admin');
+
+        // HRM entitlement (Session 4 — closes the seeder-side §10.12 gap).
+        // The migration backfill only covered tenants existing at migration
+        // time; this tenant is created BY the seeder, so it needs an
+        // explicit entitlement row.
+        $this->ensureTenantHasHrmEntitlement($acmeTenant);
 
         // CompanyContext is required for any tenant-scoped writes below
         // (Position, Employee, Department, LeaveRequest, AttendanceRecord).
@@ -742,9 +750,98 @@ final class DemoUsersSeeder extends Seeder
             );
         }
 
-        // Clear CompanyContext before moving on to the suspended-tenant block,
-        // which has its own company context concerns handled inside asSystem.
+        // Clear CompanyContext before moving on to the next-tenant blocks
+        // (Sokha + Suspended); each handles its own context concerns.
         app(CompanyContext::class)->setCurrent(null);
+
+        // ─── Sokha Trading Co. tenant + company + 3 users (Session 4) ────────
+        // Second active demo tenant. Exists so the SA dashboard renders a
+        // multi-tenant state out of the box: cross-tenant bypass is
+        // demonstrable (SA sees both Acme and Sokha tenants in one query),
+        // and the entitled_modules / tenant_modules state for two
+        // independent tenants is visible from the Tenants list. 3 users
+        // chosen to exercise more than one role tier (tenant_admin + viewer)
+        // — same coverage as Acme's admin/manager split plus a viewer who
+        // has read-only HRM perms only.
+        $sokhaTenant = Tenant::query()->firstOrCreate(
+            ['slug' => 'sokha'],
+            [
+                'name' => 'Sokha Trading Co.',
+                'legal_name' => 'Sokha Trading Co., Ltd.',
+                'country_code' => 'KH',
+                'default_currency' => 'USD',
+                'functional_currency' => 'USD',
+                'timezone' => 'Asia/Phnom_Penh',
+                'status' => TenantStatus::Active,
+            ],
+        );
+
+        $sokhaAdmin = User::query()->firstOrCreate(
+            ['email' => 'admin@sokha.test'],
+            [
+                'name' => 'Sokha Admin',
+                'password' => Hash::make('password'),
+                'email_verified_at' => now(),
+                'tenant_id' => $sokhaTenant->id,
+                'current_tenant_id' => $sokhaTenant->id,
+            ],
+        );
+
+        $sokhaManager = User::query()->firstOrCreate(
+            ['email' => 'manager@sokha.test'],
+            [
+                'name' => 'Sokha Manager',
+                'password' => Hash::make('password'),
+                'email_verified_at' => now(),
+                'tenant_id' => $sokhaTenant->id,
+                'current_tenant_id' => $sokhaTenant->id,
+            ],
+        );
+
+        $sokhaViewer = User::query()->firstOrCreate(
+            ['email' => 'viewer@sokha.test'],
+            [
+                'name' => 'Sokha Viewer',
+                'password' => Hash::make('password'),
+                'email_verified_at' => now(),
+                'tenant_id' => $sokhaTenant->id,
+                'current_tenant_id' => $sokhaTenant->id,
+            ],
+        );
+
+        $sokhaCompany = Company::query()->firstOrCreate(
+            ['tenant_id' => $sokhaTenant->id, 'slug' => 'sokha-trading-main'],
+            [
+                'name' => 'Sokha Trading Main',
+                'legal_name' => 'Sokha Trading Co., Ltd.',
+                'country_code' => 'KH',
+                'default_currency' => 'USD',
+                'functional_currency' => 'USD',
+                'timezone' => 'Asia/Phnom_Penh',
+                'status' => CompanyStatus::Active,
+            ],
+        );
+
+        // §10.12 trap — same as Acme + Suspended. WithoutModelEvents
+        // would otherwise skip the listener; explicit dispatch closes
+        // the gap so hrm_settings materialises for Sokha's company.
+        if ($sokhaCompany->wasRecentlyCreated) {
+            CompanyCreated::dispatch($sokhaCompany);
+        }
+
+        // Bind each Sokha user to the company.
+        app(BackfillUsersToCompanyAction::class)->execute($sokhaCompany);
+
+        // Role assignments — two tenant_admins + one viewer, matching
+        // the Acme admin/manager pattern + adding a third role tier
+        // to make the demo more interesting. Multi-tenant role-scoping
+        // is the proof: the same role names exist in both tenants
+        // with independent Spatie team_id scope.
+        $sokhaAdmin->assignTenantRole($sokhaTenant, 'tenant_admin');
+        $sokhaManager->assignTenantRole($sokhaTenant, 'tenant_admin');
+        $sokhaViewer->assignTenantRole($sokhaTenant, 'viewer');
+
+        $this->ensureTenantHasHrmEntitlement($sokhaTenant);
 
         // ─── Suspended Co. tenant + company + suspended user ─────────────────
         $suspendedTenant = Tenant::query()->firstOrCreate(
@@ -807,8 +904,42 @@ final class DemoUsersSeeder extends Seeder
         // is intercepted at /auth/me before permission resolution happens.
         unset($suspendedUser);
 
+        // HRM entitlement for the suspended tenant — makes "Tenants per
+        // module" dashboard tile count the full estate (suspended tenants
+        // are still entitled; suspension is enforced at /auth/me before
+        // the module gate ever fires).
+        $this->ensureTenantHasHrmEntitlement($suspendedTenant);
+
         $this->command->info(
-            'DemoUsersSeeder: seeded admin@acme.test + manager@acme.test (Acme Trading Co., active) + suspended@acme.test (Suspended Co., suspended). 7 demo positions + 4 demo branches + 6 demo employees linked by department/position/branch_id + 11 demo leave_requests (5 lifecycle + 6 approved historical) + 12 demo leave_balances (annual+sick × 6 employees for 2026, including over-consumed/exact-zero/half-day cases) + 10 demo attendance_records.'
+            'DemoUsersSeeder: seeded admin@acme.test + manager@acme.test (Acme Trading Co., active) + admin@sokha.test + manager@sokha.test + viewer@sokha.test (Sokha Trading Co., active) + suspended@acme.test (Suspended Co., suspended). 7 demo positions + 4 demo branches + 6 demo employees linked by department/position/branch_id + 11 demo leave_requests (5 lifecycle + 6 approved historical) + 12 demo leave_balances (annual+sick × 6 employees for 2026, including over-consumed/exact-zero/half-day cases) + 10 demo attendance_records. All three tenants have an Active HRM tenant_modules row.'
         );
+    }
+
+    /**
+     * Idempotent helper: ensure the tenant has an Active HRM
+     * tenant_modules row. Closes the §10.12-style gap in the seeder —
+     * the migration backfill only covers tenants existing at migration
+     * time, and `firstOrCreate` on a Tenant model (as opposed to
+     * `Tenant::factory()->create()`) doesn't fire TenantFactory::
+     * configure()'s afterCreating hook. Without this helper, demo
+     * tenants are created but lack entitlement, so admins land on the
+     * HRM module and 403 module_not_entitled.
+     *
+     * enabled_by_user_id is intentionally NULL (matches the migration
+     * backfill's "system bootstrap, no actor" semantics for non-UI-
+     * driven entitlement grants).
+     */
+    private function ensureTenantHasHrmEntitlement(Tenant $tenant): void
+    {
+        TenantModule::query()
+            ->withoutGlobalScopes()
+            ->firstOrCreate(
+                ['tenant_id' => $tenant->id, 'module_key' => 'hrm'],
+                [
+                    'status' => ModuleStatus::Active,
+                    'enabled_at' => now(),
+                    'enabled_by_user_id' => null,
+                ],
+            );
     }
 }
