@@ -49,17 +49,36 @@ final class UserController extends Controller
         $actor = $request->user();
         $tenantId = $actor?->tenant_id;
 
-        /** @var array{status?: string, include_deactivated?: bool, search?: string, role_id?: int, per_page?: int} $filters */
+        /** @var array{lifecycle?: string, status?: string, include_deactivated?: bool, search?: string, role_id?: int, per_page?: int} $filters */
         $filters = $request->validated();
+        $lifecycle = $filters['lifecycle'] ?? null;
         $includeDeactivated = (bool) ($filters['include_deactivated'] ?? false);
 
-        $query = User::query()
-            ->when($includeDeactivated, fn (Builder $q) => $q->withTrashed())
-            ->where('tenant_id', $tenantId)
-            ->with('roles');
+        // lifecycle (UI-aligned) takes precedence over the legacy
+        // status + include_deactivated combo. When unset, the legacy
+        // behavior holds for any existing callers + the test surface.
+        if ($lifecycle === 'deactivated') {
+            // Only deactivated (soft-deleted) users. Status irrelevant.
+            $query = User::query()
+                ->withTrashed()
+                ->whereNotNull('deleted_at')
+                ->where('tenant_id', $tenantId)
+                ->with('roles');
+        } elseif ($lifecycle === 'active' || $lifecycle === 'inactive') {
+            // status=lifecycle, default scope handles deleted_at.
+            $query = User::query()
+                ->where('tenant_id', $tenantId)
+                ->where('status', $lifecycle)
+                ->with('roles');
+        } else {
+            $query = User::query()
+                ->when($includeDeactivated, fn (Builder $q) => $q->withTrashed())
+                ->where('tenant_id', $tenantId)
+                ->with('roles');
 
-        if (isset($filters['status'])) {
-            $query->where('status', $filters['status']);
+            if (isset($filters['status'])) {
+                $query->where('status', $filters['status']);
+            }
         }
 
         if (isset($filters['search']) && $filters['search'] !== '') {
