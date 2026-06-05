@@ -6,6 +6,7 @@ namespace App\Web\API\V1\Controllers\Auth;
 
 use App\Models\Tenant;
 use App\Models\User;
+use App\Support\Identity\Enums\UserStatus;
 use App\Support\Identity\Enums\UserType;
 use App\Web\API\V1\Controllers\Controller;
 use App\Web\API\V1\Requests\Auth\LoginRequest;
@@ -68,9 +69,16 @@ final class LoginController extends Controller
         // ============================================================================
 
         // User is no longer tenant-scoped (see User model JSDoc), so no
-        // withoutGlobalScope is needed here — direct email lookup runs
-        // unscoped by design.
-        $user = User::query()->where('email', $email)->first();
+        // withoutGlobalScope is needed for the TenantScope. The
+        // `withTrashed()` IS necessary so a soft-deleted user is still
+        // returned here and gets rejected by the dedicated $notDeleted
+        // predicate below (rather than silently disappearing via the
+        // SoftDeletes global scope into the generic $user === null
+        // branch). The intent is per §10.17 — each gate names itself
+        // and fires independently, so a future regression that
+        // accidentally bypasses one of them fails the corresponding
+        // LOAD-BEARING test loud.
+        $user = User::query()->withTrashed()->where('email', $email)->first();
 
         // Pick the inputs for the next two operations. Both branches feed into
         // the SAME Hash::check + SAME Tenant::find call below — only the values
@@ -102,11 +110,26 @@ final class LoginController extends Controller
         // as a tenant_user with a valid FK.
         $tenant = Tenant::query()->find($tenantId);
 
+        // ============================================================================
+        // PREDICATE — four named booleans + the SA carve-out + the
+        // user-exists check. Each gate is independently testable and
+        // fires loud on its own. Per §10.17 (split-not-relax) and
+        // §10.19 (test the user-facing flow per gate).
+        //
+        // Every gate computes UNCONDITIONALLY — preserves the timing-
+        // attack mitigation. Short-circuiting any gate on a missing
+        // $user re-introduces a timing oracle; that's why each gate
+        // re-tests `$user !== null` rather than nesting under a
+        // single guard.
+        // ============================================================================
+
         $isSuperAdmin = $user !== null && $user->type === UserType::SuperAdmin;
 
         $tenantOk = $tenant !== null || $isSuperAdmin;
+        $statusOk = $user !== null && $user->status === UserStatus::Active;
+        $notDeleted = $user !== null && $user->deleted_at === null;
 
-        if ($user === null || ! $passwordOk || ! $tenantOk) {
+        if ($user === null || ! $passwordOk || ! $tenantOk || ! $statusOk || ! $notDeleted) {
             // Single generic error. Same body, same status, same response time as
             // every other failure branch — no info leak about which check failed.
             throw ValidationException::withMessages([

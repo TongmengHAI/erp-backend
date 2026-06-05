@@ -6,11 +6,13 @@ namespace App\Models;
 
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
 use App\Support\Audit\Concerns\Auditable;
+use App\Support\Identity\Enums\UserStatus;
 use App\Support\Identity\Enums\UserType;
 use App\Support\Tenancy\Concerns\HasTenantRoles;
 use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Support\Carbon;
@@ -27,6 +29,8 @@ use Spatie\Permission\Traits\HasRoles;
  * @property Carbon|null $email_verified_at
  * @property string $password
  * @property UserType $type
+ * @property UserStatus $status
+ * @property Carbon|null $deleted_at
  * @property string|null $remember_token
  *
  * @todo Add `locale` column (default 'en', accepts 'km') when Khmer translation
@@ -51,6 +55,7 @@ class User extends Authenticatable
     use HasRoles;
     use HasTenantRoles;
     use Notifiable;
+    use SoftDeletes;
 
     /** @var list<string> */
     protected $fillable = [
@@ -62,6 +67,7 @@ class User extends Authenticatable
         'default_company_id',
         'current_company_id',
         'type',
+        'status',
     ];
 
     /** @var list<string> */
@@ -77,7 +83,21 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
             'type' => UserType::class,
+            'status' => UserStatus::class,
         ];
+    }
+
+    /**
+     * Convenience predicate used by LoginController and any future
+     * authorization gate. Mirrors isSuperAdmin()'s shape — single
+     * source of truth for "is this user currently allowed to act."
+     * Soft-delete is checked separately ($notDeleted in the
+     * LoginController predicate) so the two dimensions stay
+     * independently observable per §10.17.
+     */
+    public function isActive(): bool
+    {
+        return $this->status === UserStatus::Active;
     }
 
     /**

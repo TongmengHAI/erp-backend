@@ -31,6 +31,7 @@ declare(strict_types=1);
 
 use App\Models\Tenant;
 use App\Models\User;
+use App\Support\Identity\Enums\UserStatus;
 use App\Support\Identity\Enums\UserType;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
@@ -233,6 +234,139 @@ it('LOAD-BEARING: super admin (tenant_id=NULL) authenticates and the response ca
     // current_tenant_id never gets a non-null write for an SA — the
     // composite CHECK constraint would reject it.
     expect($sa->fresh()->current_tenant_id)->toBeNull();
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Predicate-isolation LOAD-BEARING tests (Phase 2A Session 1).
+//
+// LoginController's authentication predicate is a flat AND of four named
+// booleans plus the user-exists short-circuit:
+//
+//   $user === null    || ! $passwordOk
+//                     || ! $tenantOk     ($tenant !== null OR isSuperAdmin)
+//                     || ! $statusOk     ($user->status === UserStatus::Active)
+//                     || ! $notDeleted   ($user->deleted_at === null)
+//
+// Each test below sets up a user where ONLY ONE of those booleans fails;
+// every other condition is at its passing value. A future regression that
+// accidentally short-circuits one of the booleans fails that test specifically
+// — the diagnostic surface is in the test name, not in the controller. Per
+// §10.17 (split, not relax) and §10.19 (test the user-facing flow per gate).
+//
+// All four tests assert:
+//   - HTTP 401
+//   - Generic email-keyed validation error (auth.failed)
+//   - auth('web')->check() is false (no session issued)
+//
+// Note on overlap with the existing 'wrong password' test below: that test
+// asserts the response shape contract; the predicate-isolation test below
+// asserts the gate-isolation invariant. Both stay — different concerns.
+// ─────────────────────────────────────────────────────────────────────────────
+
+it('LOAD-BEARING: $passwordOk gate fires independently — wrong password rejects an otherwise valid user', function (): void {
+    $tenant = Tenant::factory()->create();
+    $user = User::factory()->forTenant($tenant)->create([
+        'password' => Hash::make('right-password'),
+        'status' => UserStatus::Active,
+        // deleted_at left NULL by default — only $passwordOk should fail.
+    ]);
+
+    $response = $this->postJson('/api/v1/auth/login', [
+        'email' => $user->email,
+        'password' => 'wrong-password',
+    ]);
+
+    $response->assertStatus(401);
+    $response->assertJsonValidationErrors('email');
+    expect(auth('web')->check())->toBeFalse();
+});
+
+it('LOAD-BEARING: $tenantOk gate fires independently — tenant_user whose tenant resolves to null rejects', function (): void {
+    // Reach the $tenantOk = false branch for a non-SA user. The FK
+    // constraint + composite users_super_admin_no_tenant_or_company_check
+    // make "tenant_user with broken tenant_id" structurally unreachable;
+    // the achievable failure mode is "tenant_user whose tenant_id points
+    // to a SOFT-DELETED tenant" — Tenant::find() applies the SoftDeletes
+    // default scope and returns null, so $tenant === null, no SA
+    // exemption applies, $tenantOk fails.
+    //
+    // This is the same predicate boolean firing the same way as the
+    // structurally-impossible "broken FK" case the controller comment
+    // documents — both reach `Tenant::find() === null`. The test
+    // confirms the gate fires; the regression it protects against is
+    // a refactor that accidentally short-circuits $tenantOk.
+    $tenant = Tenant::factory()->create();
+    $user = User::factory()->forTenant($tenant)->create([
+        'password' => Hash::make('correct-password'),
+        'status' => UserStatus::Active,
+    ]);
+
+    // Sanity-check the discriminator: not a super_admin, so the SA
+    // carve-out does not apply.
+    expect($user->type)->toBe(UserType::TenantUser);
+
+    // Soft-delete the tenant so Tenant::find($user->tenant_id) returns
+    // null under the default scope, exactly mirroring the "broken FK"
+    // branch the controller is defending against.
+    $tenant->delete();
+    expect(Tenant::find($tenant->id))->toBeNull();
+    expect(Tenant::withTrashed()->find($tenant->id))->not->toBeNull();
+
+    $response = $this->postJson('/api/v1/auth/login', [
+        'email' => $user->email,
+        'password' => 'correct-password',
+    ]);
+
+    $response->assertStatus(401);
+    $response->assertJsonValidationErrors('email');
+    expect(auth('web')->check())->toBeFalse();
+});
+
+it('LOAD-BEARING: $statusOk gate fires independently — status=inactive user rejects', function (): void {
+    $tenant = Tenant::factory()->create();
+    $user = User::factory()->forTenant($tenant)->inactive()->create([
+        'password' => Hash::make('correct-password'),
+        // tenant_id valid, status=inactive (only failure), deleted_at NULL.
+    ]);
+
+    expect($user->status)->toBe(UserStatus::Inactive);
+
+    $response = $this->postJson('/api/v1/auth/login', [
+        'email' => $user->email,
+        'password' => 'correct-password',
+    ]);
+
+    $response->assertStatus(401);
+    $response->assertJsonValidationErrors('email');
+    expect(auth('web')->check())->toBeFalse();
+});
+
+it('LOAD-BEARING: $notDeleted gate fires independently — soft-deleted user rejects', function (): void {
+    $tenant = Tenant::factory()->create();
+    $user = User::factory()->forTenant($tenant)->create([
+        'password' => Hash::make('correct-password'),
+        'status' => UserStatus::Active,
+        // Soft-delete after create — deleted_at gets set, every other
+        // condition stays at its passing value.
+    ]);
+    $user->delete();
+
+    // Confirm the row is soft-deleted (not hard-deleted) — the
+    // LoginController fetches via withTrashed() so the predicate can
+    // see it and reject it via $notDeleted rather than silently
+    // dropping into the generic $user === null branch.
+    $fetched = User::withTrashed()->find($user->id);
+    expect($fetched)->not->toBeNull();
+    expect($fetched->deleted_at)->not->toBeNull();
+
+    $response = $this->postJson('/api/v1/auth/login', [
+        'email' => $user->email,
+        'password' => 'correct-password',
+    ]);
+
+    $response->assertStatus(401);
+    $response->assertJsonValidationErrors('email');
+    expect(auth('web')->check())->toBeFalse();
 });
 
 it('the response payload shape matches { user, tenant } and excludes sensitive fields', function (): void {

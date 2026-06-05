@@ -51,6 +51,48 @@ it('creating a Tenant produces an audit row with action=created and tenant_id=nu
     expect($row->before)->toBeNull();
 });
 
+it('LOAD-BEARING: soft-deleting a User produces an audit row with action=soft_deleted, correct subject, and actor', function (): void {
+    // Phase 2A Session 1 — pins the audit mechanism the Phase 2A
+    // Deactivate action relies on. The DeactivateUserAction (Session 2)
+    // will perform $user->delete() (soft-delete via the SoftDeletes
+    // trait added in Session 1's migration). Auditable's `deleting`
+    // model event fires through the existing trait wiring — this test
+    // confirms the deleted-event audit row lands with the correct
+    // subject (the soft-deleted user), action ('deleted'), actor (the
+    // administrator who triggered the action), and tenant_id (the
+    // target user's tenant).
+    $tenant = Tenant::factory()->create();
+    $actor = User::factory()->forTenant($tenant)->create();
+    $target = User::factory()->forTenant($tenant)->create(['name' => 'About-to-be-deactivated User']);
+
+    $this->actingAs($actor);
+
+    $target->delete(); // soft-delete via SoftDeletes — sets deleted_at
+
+    // Auditable's deleted-event handler dispatches to 'soft_deleted' for
+    // models using the SoftDeletes trait (and 'hard_deleted' for force-
+    // deletes); see writeAuditOnDeleted() in app/Support/Audit/Concerns/
+    // Auditable.php. The Phase 2A DeactivateUserAction will use soft-
+    // delete, so this is the action value that matters.
+    $row = AuditLog::query()
+        ->where('auditable_type', User::class)
+        ->where('auditable_id', $target->id)
+        ->where('action', 'soft_deleted')
+        ->latest('id')
+        ->first();
+
+    expect($row)->not->toBeNull();
+    expect($row->tenant_id)->toBe($tenant->id);   // target's tenant_id propagated
+    expect($row->actor_id)->toBe($actor->id);     // captured from AuditContext
+    expect($row->actor_type)->toBe(User::class);
+
+    // The soft-delete is NOT a hard removal — confirm the row still
+    // exists in the DB (withTrashed) so the audit row's auditable_id
+    // remains resolvable to a real row for audit-log reads.
+    expect(User::withTrashed()->find($target->id))->not->toBeNull();
+    expect(User::find($target->id))->toBeNull(); // default scope excludes deleted
+});
+
 it('rolling back the parent transaction does NOT persist the audit row (atomicity)', function (): void {
     $countBefore = AuditLog::query()->count();
 

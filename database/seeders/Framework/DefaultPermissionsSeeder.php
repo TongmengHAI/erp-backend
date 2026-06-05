@@ -137,6 +137,22 @@ final class DefaultPermissionsSeeder extends Seeder
             // the full convention.
             'settings.hrm.view',
             'settings.hrm.update',
+            // users.* — top-level user-management domain (Phase 2A).
+            // All five granted to tenant_admin only; non-admin roles
+            // get zero users.* in this phase (subset-by-role lands in
+            // Phase 2B alongside the custom-role editor). .invite is
+            // distinct from .create because Phase 2A's user-creation
+            // path is invitation-only (admin invites → invitee
+            // self-creates via the accept-invitation flow); a future
+            // direct-create endpoint would gate on .create. .disable
+            // vs .deactivate are distinct authority kinds —
+            // reversible block (status='inactive') vs soft-delete —
+            // mirroring the leave_request.update-vs-approve split.
+            'users.view',
+            'users.invite',
+            'users.update',
+            'users.disable',
+            'users.deactivate',
         ];
     }
 }

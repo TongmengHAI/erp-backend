@@ -100,6 +100,17 @@ final class DefaultRolesSeeder extends Seeder
                 // status, etc.) for their company.
                 'settings.hrm.view',
                 'settings.hrm.update',
+                // users.* — Phase 2A grants all five to tenant_admin
+                // only. accountant + viewer get NONE; the test in
+                // tests/Feature/Auth/UsersPermissionSeedTest.php
+                // asserts the empty-case for every non-admin role
+                // (forward-compatible loop — any future role that
+                // accidentally inherits users.* fails that test loud).
+                'users.view',
+                'users.invite',
+                'users.update',
+                'users.disable',
+                'users.deactivate',
             ],
             'accountant' => [
                 'accounting.journal_entry.view',

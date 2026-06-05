@@ -6,6 +6,7 @@ namespace Database\Factories;
 
 use App\Models\Tenant;
 use App\Models\User;
+use App\Support\Identity\Enums\UserStatus;
 use App\Support\Identity\Enums\UserType;
 use Illuminate\Database\Eloquent\Factories\Factory;
 use Illuminate\Support\Facades\Hash;
@@ -39,6 +40,12 @@ class UserFactory extends Factory
             // the cast enum; null would throw. Setting it explicitly
             // keeps factory-created models internally consistent.
             'type' => UserType::TenantUser,
+            // Same reasoning as ->type above — the DB default is 'active'
+            // but the factory model doesn't refresh after insert.
+            // LoginController checks $user->status === UserStatus::Active;
+            // an in-memory null would fail that gate spuriously in tests
+            // that hit /api/v1/auth/login without writing through fresh().
+            'status' => UserStatus::Active,
         ];
     }
 
@@ -69,6 +76,19 @@ class UserFactory extends Factory
             'current_tenant_id' => null,
             'default_company_id' => null,
             'current_company_id' => null,
+        ]);
+    }
+
+    /**
+     * Inactive (status='inactive'). Used by the LOAD-BEARING $statusOk
+     * predicate-isolation test in LoginTest.php — a user with this
+     * state but otherwise valid credentials must be rejected by the
+     * statusOk gate independently of every other check.
+     */
+    public function inactive(): static
+    {
+        return $this->state(fn (array $attributes): array => [
+            'status' => UserStatus::Inactive,
         ]);
     }
 }
