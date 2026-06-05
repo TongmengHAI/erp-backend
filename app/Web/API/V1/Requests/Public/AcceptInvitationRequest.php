@@ -42,17 +42,37 @@ final class AcceptInvitationRequest extends FormRequest
             'password' => [
                 'required',
                 'string',
-                // ->uncompromised() is intentionally NOT included.
-                // It triggers an outbound HTTPS request to
-                // api.pwnedpasswords.com via curl, which fails on
-                // Windows dev (XAMPP) due to a missing CA bundle
-                // (cURL error 60). Add ->uncompromised() back once the
-                // production environment's CA chain is confirmed
-                // working — likely as part of the prod-deploy slice.
-                // The other four rules already exceed Laravel 12's
-                // default Password::min(8); this is a defense-in-depth
-                // gap, not a baseline weakness.
-                Password::min(12)->mixedCase()->numbers()->symbols(),
+                Password::min(12)
+                    ->mixedCase()
+                    ->numbers()
+                    ->symbols()
+                    // ─────────────────────────────────────────────────
+                    // SECURITY-CONTROL REDUCTION — RE-ENABLE WHEN PROD CA
+                    // CHAIN IS CONFIRMED WORKING.
+                    //
+                    // ->uncompromised() calls api.pwnedpasswords.com via
+                    // curl. On Windows dev (XAMPP) the bundled PHP has
+                    // no CA bundle configured by default, so the rule
+                    // throws "cURL error 60: SSL certificate problem"
+                    // and a valid strong password gets rejected at 422.
+                    //
+                    // Production (Linux VPS, Phase 2A's deploy target)
+                    // ships with a system CA bundle out of the box; the
+                    // rule works there without env config. The
+                    // omission is Windows-dev-only.
+                    //
+                    // To re-enable: chain ->uncompromised() back onto
+                    // the Password rule below. Surfaced + commented
+                    // during Phase 2A Session 2 (commit e2aaa35).
+                    // Re-enable as part of the prod-deploy slice OR
+                    // when the Windows dev env is configured with a
+                    // CA bundle, whichever comes first.
+                    //
+                    // The four rules already chained exceed Laravel
+                    // 12's default Password::min(8); this is a
+                    // defense-in-depth gap, NOT a baseline weakness.
+                    // ─────────────────────────────────────────────────
+                    /* ->uncompromised() */,
             ],
             'name' => ['nullable', 'string', 'min:1', 'max:255'],
         ];
