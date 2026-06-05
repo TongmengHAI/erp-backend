@@ -6,6 +6,8 @@ namespace App\Providers;
 
 use App\Domain\HRM\Listeners\BootstrapHrmSettingsListener;
 use App\Domain\HRM\Services\HrmSettingsRepository;
+use App\Domain\Identity\Events\UserInvited;
+use App\Domain\Identity\Listeners\SendInvitationEmailListener;
 use App\Support\Audit\AuditContext;
 use App\Support\Company\CompanyContext;
 use App\Support\Company\Events\CompanyCreated;
@@ -60,6 +62,11 @@ class AppServiceProvider extends ServiceProvider
     {
         // HRM listens for company bootstrap.
         Event::listen(CompanyCreated::class, BootstrapHrmSettingsListener::class);
+
+        // Identity (Phase 2A): send invitation email when InviteUserAction
+        // commits a new Invitation. Listener is queued on 'mail' queue;
+        // the email send is async from the HTTP request.
+        Event::listen(UserInvited::class, SendInvitationEmailListener::class);
     }
 
     private function configureRateLimiters(): void

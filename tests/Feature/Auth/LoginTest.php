@@ -295,6 +295,16 @@ it('LOAD-BEARING: $tenantOk gate fires independently — tenant_user whose tenan
     // documents — both reach `Tenant::find() === null`. The test
     // confirms the gate fires; the regression it protects against is
     // a refactor that accidentally short-circuits $tenantOk.
+    //
+    // DUAL COVERAGE INTENTIONAL: this test ALSO pins the user-facing
+    // invariant that a soft-deleted tenant blocks its users' logins
+    // (via the same $tenantOk = $tenant !== null branch). The
+    // suspended-tenant path is separately covered by the suspended-
+    // tenant test below; this test pins soft-deleted-tenant. Future
+    // readers should NOT remove this test on the grounds that the SA
+    // login test already covers the SA carve-out — the carve-out and
+    // the tenant_user soft-deleted-tenant case are different gate
+    // outcomes for the same predicate.
     $tenant = Tenant::factory()->create();
     $user = User::factory()->forTenant($tenant)->create([
         'password' => Hash::make('correct-password'),

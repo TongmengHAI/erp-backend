@@ -3,6 +3,16 @@
 declare(strict_types=1);
 
 use App\Web\API\V1\Controllers\Admin\HrmSettingsController;
+use App\Web\API\V1\Controllers\Admin\Users\CancelInvitationController;
+use App\Web\API\V1\Controllers\Admin\Users\DeactivateUserController;
+use App\Web\API\V1\Controllers\Admin\Users\DisableUserController;
+use App\Web\API\V1\Controllers\Admin\Users\EnableUserController;
+use App\Web\API\V1\Controllers\Admin\Users\InvitationController;
+use App\Web\API\V1\Controllers\Admin\Users\ResendInvitationController;
+use App\Web\API\V1\Controllers\Admin\Users\RestoreUserController;
+use App\Web\API\V1\Controllers\Admin\Users\UserController;
+use App\Web\API\V1\Controllers\Public\AcceptInvitationController;
+use App\Web\API\V1\Controllers\Public\ShowInvitationController;
 use App\Web\API\V1\Controllers\Auth\LoginController;
 use App\Web\API\V1\Controllers\Auth\LogoutController;
 use App\Web\API\V1\Controllers\Auth\MeController;
@@ -131,6 +141,81 @@ Route::middleware(['auth:sanctum', 'tenant', 'company'])->group(function (): voi
         Route::patch('settings/{settings}', [HrmSettingsController::class, 'update'])
             ->name('admin.hrm.settings.update');
     });
+
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 2A — User management (tenant-admin surface).
+//
+// Separate route group with auth:sanctum + tenant ONLY (no company
+// middleware). User management is tenant-scoped — users belong to a
+// tenant, NOT to a specific company within that tenant. The HRM
+// settings routes above DO need company context (settings are 1:1
+// with company); these don't. Lifting them out of the company group
+// keeps each route's middleware chain matched to its actual
+// requirements.
+//
+// Gating: /admin/users/* uses the users.view permission at the
+// controller level via AuthorizesUserManagement::authorizeUsersAccess
+// (404 for non-admin per the §10.6 feature-hide convention).
+// No module entitlement gate — users management isn't an
+// entitlement-gated module; every tenant has it as long as their
+// tenant_admin has the perms.
+// ─────────────────────────────────────────────────────────────────────────────
+Route::middleware(['auth:sanctum', 'tenant'])->prefix('admin/users')->name('admin.users.')->group(function (): void {
+    Route::get('/', [UserController::class, 'index'])->name('index');
+
+    // Invitations live BEFORE the {userId} routes so the literal
+    // 'invitations' segment doesn't conflict with the user-id binding.
+    // Same gate (users.view at controller level) — invitations are
+    // part of the user-management surface, not a separate sidebar.
+    Route::prefix('invitations')->name('invitations.')->group(function (): void {
+        Route::get('/', [InvitationController::class, 'index'])->name('index');
+        Route::post('/', [InvitationController::class, 'store'])->name('store');
+        Route::post('{invitationId}/cancel', CancelInvitationController::class)
+            ->whereNumber('invitationId')->name('cancel');
+        Route::post('{invitationId}/resend', ResendInvitationController::class)
+            ->whereNumber('invitationId')->name('resend');
+    });
+
+    Route::get('{userId}', [UserController::class, 'show'])
+        ->whereNumber('userId')->name('show');
+    Route::patch('{userId}', [UserController::class, 'update'])
+        ->whereNumber('userId')->name('update');
+
+    // State-machine transitions — dedicated invokable controllers
+    // per CLAUDE.md §10.2 (NOT methods on UserController).
+    Route::post('{userId}/disable', DisableUserController::class)
+        ->whereNumber('userId')->name('disable');
+    Route::post('{userId}/enable', EnableUserController::class)
+        ->whereNumber('userId')->name('enable');
+    Route::post('{userId}/deactivate', DeactivateUserController::class)
+        ->whereNumber('userId')->name('deactivate');
+    Route::post('{userId}/restore', RestoreUserController::class)
+        ->whereNumber('userId')->name('restore');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Public invitation endpoints — NO auth middleware. The invitee hasn't
+// signed up yet; they hit these from the public AcceptInvitationPage
+// (Session 5) using only the raw token from their email.
+//
+// SHOW returns 422 (not 404) for invalid tokens to keep the response
+// shape uniform with the state-error cases (expired / cancelled /
+// accepted) — the SPA branches on error_code, not status code, to
+// render the matching InvitationInvalidPage variant.
+//
+// Token format constraint: 43 URL-safe base64 chars (Str::random(43)).
+// The route constraint rejects malformed tokens before they reach the
+// controller's SHA-256 hash + DB lookup.
+// ─────────────────────────────────────────────────────────────────────────────
+Route::prefix('invitations')->name('invitations.')->group(function (): void {
+    Route::get('{token}', ShowInvitationController::class)
+        ->where('token', '[A-Za-z0-9]{43}')
+        ->name('show');
+    Route::post('{token}/accept', AcceptInvitationController::class)
+        ->where('token', '[A-Za-z0-9]{43}')
+        ->name('accept');
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

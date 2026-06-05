@@ -78,6 +78,16 @@ final class LoginController extends Controller
         // and fires independently, so a future regression that
         // accidentally bypasses one of them fails the corresponding
         // LOAD-BEARING test loud.
+        //
+        // ⚠ DO NOT COPY THIS PATTERN ELSEWHERE. SoftDeletes' default
+        // scope IS the right behavior in every other query in this
+        // codebase. The withTrashed() here exists for ONE reason: to
+        // route soft-deleted rows through the named $notDeleted
+        // boolean so the gate is observable and testable in isolation.
+        // Any other endpoint that filters out soft-deleted users via
+        // the default scope is doing the right thing — replicating
+        // withTrashed() in business endpoints surfaces deactivated
+        // users to admin UIs that shouldn't see them.
         $user = User::query()->withTrashed()->where('email', $email)->first();
 
         // Pick the inputs for the next two operations. Both branches feed into

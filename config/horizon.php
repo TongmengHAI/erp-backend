@@ -201,7 +201,12 @@ return [
     'defaults' => [
         'supervisor-1' => [
             'connection' => 'redis',
-            'queue' => ['default'],
+            // 'mail' is the dedicated queue for email-sending jobs
+            // (SendInvitationEmailListener and any future mail-side
+            // listeners). Isolation per CLAUDE.md §4's "dedicated
+            // `accounting` queue" precedent — a surge in invitations
+            // doesn't block unrelated queue traffic.
+            'queue' => ['default', 'mail'],
             'balance' => 'auto',
             'autoScalingStrategy' => 'time',
             'maxProcesses' => 1,
