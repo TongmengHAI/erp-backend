@@ -10,9 +10,8 @@ use App\Web\API\V1\Controllers\Admin\Users\EnableUserController;
 use App\Web\API\V1\Controllers\Admin\Users\InvitationController;
 use App\Web\API\V1\Controllers\Admin\Users\ResendInvitationController;
 use App\Web\API\V1\Controllers\Admin\Users\RestoreUserController;
+use App\Web\API\V1\Controllers\Admin\Users\RoleOptionsController;
 use App\Web\API\V1\Controllers\Admin\Users\UserController;
-use App\Web\API\V1\Controllers\Public\AcceptInvitationController;
-use App\Web\API\V1\Controllers\Public\ShowInvitationController;
 use App\Web\API\V1\Controllers\Auth\LoginController;
 use App\Web\API\V1\Controllers\Auth\LogoutController;
 use App\Web\API\V1\Controllers\Auth\MeController;
@@ -25,6 +24,8 @@ use App\Web\API\V1\Controllers\HRM\LeaveBalanceController;
 use App\Web\API\V1\Controllers\HRM\LeaveRequestController;
 use App\Web\API\V1\Controllers\HRM\PositionController;
 use App\Web\API\V1\Controllers\HRM\RejectLeaveRequestController;
+use App\Web\API\V1\Controllers\Public\AcceptInvitationController;
+use App\Web\API\V1\Controllers\Public\ShowInvitationController;
 use App\Web\API\V1\Controllers\SuperAdmin\DashboardController;
 use App\Web\API\V1\Controllers\SuperAdmin\TenantController;
 use App\Web\API\V1\Controllers\SuperAdmin\TenantModuleController;
@@ -164,6 +165,11 @@ Route::middleware(['auth:sanctum', 'tenant', 'company'])->group(function (): voi
 // ─────────────────────────────────────────────────────────────────────────────
 Route::middleware(['auth:sanctum', 'tenant'])->prefix('admin/users')->name('admin.users.')->group(function (): void {
     Route::get('/', [UserController::class, 'index'])->name('index');
+
+    // Role options for the admin invite + edit forms. Static-shaped:
+    // returns Spatie roles for the 'web' guard. Read-only. Same
+    // users.view gate as the rest of /admin/users/*.
+    Route::get('role-options', RoleOptionsController::class)->name('role-options');
 
     // Invitations live BEFORE the {userId} routes so the literal
     // 'invitations' segment doesn't conflict with the user-id binding.
