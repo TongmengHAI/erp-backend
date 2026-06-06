@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
+use App\Domain\Identity\Models\Role;
 use Spatie\Permission\DefaultTeamResolver;
 use Spatie\Permission\Models\Permission;
-use Spatie\Permission\Models\Role;
 
 return [
 
@@ -30,6 +30,11 @@ return [
          * `Spatie\Permission\Contracts\Role` contract.
          */
 
+        // Project-extended Role model. Adds Auditable + SoftDeletes +
+        // is_system flag + description column + Phase 2B scopes. The
+        // Spatie contract is preserved; HasRoles trait usage on User
+        // continues to work unchanged. See app/Domain/Identity/Models/
+        // Role.php for the rationale.
         'role' => Role::class,
 
     ],

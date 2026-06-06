@@ -153,6 +153,20 @@ final class DefaultPermissionsSeeder extends Seeder
             'users.update',
             'users.disable',
             'users.deactivate',
+            // roles.* — Phase 2B custom-role editor. All five granted
+            // to tenant_admin only. .assign is a SEPARATE permission
+            // from users.update — a custom role can have one without
+            // the other (deliberate granularity choice). Phase 2A
+            // previously conflated role assignment under users.update;
+            // Phase 2B splits. Tests exercising user editing or role
+            // assignment need explicit setup of which permissions the
+            // actor has (the same discipline as leave_request's
+            // .update-vs-.approve split).
+            'roles.view',
+            'roles.create',
+            'roles.update',
+            'roles.delete',
+            'roles.assign',
         ];
     }
 }

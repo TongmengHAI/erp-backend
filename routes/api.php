@@ -24,6 +24,7 @@ use App\Web\API\V1\Controllers\HRM\LeaveBalanceController;
 use App\Web\API\V1\Controllers\HRM\LeaveRequestController;
 use App\Web\API\V1\Controllers\HRM\PositionController;
 use App\Web\API\V1\Controllers\HRM\RejectLeaveRequestController;
+use App\Web\API\V1\Controllers\Permissions\PermissionDescriptionsController;
 use App\Web\API\V1\Controllers\Public\AcceptInvitationController;
 use App\Web\API\V1\Controllers\Public\ShowInvitationController;
 use App\Web\API\V1\Controllers\SuperAdmin\DashboardController;
@@ -49,6 +50,15 @@ Route::middleware('auth:sanctum')->group(function (): void {
     Route::post('/auth/logout', LogoutController::class)
         ->middleware('throttle:30,1')
         ->name('auth.logout');
+
+    // Permission descriptions catalog — authenticated users only,
+    // no tenant context required, no specific permission gate.
+    // Consumed by PermissionPicker + PermissionList components
+    // (Phase 2B Session 4). See controller docblock for rationale
+    // on the open-to-authenticated-users access model.
+    Route::get('/permissions/descriptions', PermissionDescriptionsController::class)
+        ->middleware('throttle:60,1')
+        ->name('permissions.descriptions');
 });
 
 // --- /auth/me: tenant-scoped, company OPTIONAL ---
