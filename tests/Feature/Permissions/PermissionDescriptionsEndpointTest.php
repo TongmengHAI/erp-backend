@@ -31,7 +31,7 @@ beforeEach(function (): void {
     $this->withHeader('Origin', 'http://localhost');
 });
 
-it('returns 200 with both maps under data when authenticated', function (): void {
+it('returns 200 with all three maps under data when authenticated', function (): void {
     $tenant = Tenant::factory()->create();
     $user = User::factory()->forTenant($tenant)->create();
     $this->actingAs($user);
@@ -43,13 +43,38 @@ it('returns 200 with both maps under data when authenticated', function (): void
         'data' => [
             'domains',
             'permissions',
+            'permission_ids',
         ],
     ]);
 
     expect($response->json('data.domains'))->toBeArray();
     expect($response->json('data.permissions'))->toBeArray();
+    expect($response->json('data.permission_ids'))->toBeArray();
     expect($response->json('data.domains.hrm'))->toBe('HRM');
     expect($response->json('data.domains.roles'))->toBe('Roles');
+});
+
+it('LOAD-BEARING: permission_ids maps every seeded permission name to its DB id', function (): void {
+    // Phase 2B Session 4 addition. The PermissionPicker needs the
+    // name → id mapping to emit ID arrays at submit time. This pins
+    // that the field is present + populated for every registered
+    // permission. Missing entries would surface as "can't toggle X"
+    // in the picker.
+    $tenant = Tenant::factory()->create();
+    $user = User::factory()->forTenant($tenant)->create();
+    $this->actingAs($user);
+
+    $response = $this->getJson('/api/v1/permissions/descriptions');
+    $response->assertOk();
+
+    /** @var array<string, int> $idMap */
+    $idMap = $response->json('data.permission_ids');
+
+    $registered = Permission::query()->get(['id', 'name']);
+    foreach ($registered as $perm) {
+        expect($idMap)->toHaveKey($perm->name);
+        expect($idMap[$perm->name])->toBe((int) $perm->id);
+    }
 });
 
 it('returns 401 when unauthenticated', function (): void {
