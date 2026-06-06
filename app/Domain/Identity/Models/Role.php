@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace App\Domain\Identity\Models;
 
+use App\Models\User;
 use App\Support\Audit\Concerns\Auditable;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Relations\MorphToMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Carbon;
 use Spatie\Permission\Models\Role as SpatieRole;
@@ -67,6 +69,30 @@ class Role extends SpatieRole
         return [
             'is_system' => 'boolean',
         ];
+    }
+
+    /**
+     * Override Spatie's users() relation to return an explicit
+     * MorphToMany against App\Models\User. Spatie's default resolves
+     * the user model class at relation-resolution time via
+     * `getModelForGuard($this->attributes['guard_name'] ?? ...)`,
+     * which fails in some test contexts (specifically `withCount`
+     * which invokes the relation method on a fresh empty instance
+     * with no attributes set). Pinning the class explicitly here
+     * removes the runtime resolution surface — the relation always
+     * targets User.
+     *
+     * @return MorphToMany<User, $this>
+     */
+    public function users(): MorphToMany
+    {
+        return $this->morphedByMany(
+            User::class,
+            'model',
+            config('permission.table_names.model_has_roles'),
+            config('permission.column_names.role_pivot_key', 'role_id'),
+            config('permission.column_names.model_morph_key', 'model_id')
+        );
     }
 
     /**

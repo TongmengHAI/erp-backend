@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Web\API\V1\Controllers\Admin\Users;
 
+use App\Domain\Identity\Exceptions\MissingPermissionException;
 use App\Models\User;
 use App\Web\API\V1\Controllers\Concerns\AuthorizesUserManagement;
 use App\Web\API\V1\Controllers\Controller;
@@ -119,6 +120,29 @@ final class UserController extends Controller
     {
         $this->authorizeUsersAccess($request);
         $this->authorizeUsersAction($request, 'users.update');
+
+        // Phase 2B Tightening 1: roles.assign is SEPARATE from
+        // users.update. If the request body includes role_id (for ANY
+        // value, including the user's current role — the backend is
+        // the single source of truth on this granularity), the actor
+        // must have roles.assign. Otherwise 403 with
+        // error_code='missing_permission'.
+        //
+        // The FE's responsibility is to OMIT role_id from the PATCH
+        // body when the actor lacks roles.assign. Backend rejects
+        // unconditionally — drift from the FE doesn't silently
+        // succeed.
+        //
+        // 403 (NOT 422): the request is well-formed, the actor is
+        // forbidden from this specific change. Distinguishes
+        // "permission mismatch" from "field validation failed."
+        $actor = $request->user();
+        if (
+            $request->has('role_id')
+            && ($actor === null || ! $actor->can('roles.assign'))
+        ) {
+            throw new MissingPermissionException(requiredPermission: 'roles.assign');
+        }
 
         $target = User::withTrashed()->with('roles')->findOrFail($userId);
         $this->authorizeUserTargetIsInCurrentTenant($request, $target);

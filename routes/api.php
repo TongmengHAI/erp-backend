@@ -3,6 +3,8 @@
 declare(strict_types=1);
 
 use App\Web\API\V1\Controllers\Admin\HrmSettingsController;
+use App\Web\API\V1\Controllers\Admin\Roles\RoleController;
+use App\Web\API\V1\Controllers\Admin\Roles\RoleImpactController;
 use App\Web\API\V1\Controllers\Admin\Users\CancelInvitationController;
 use App\Web\API\V1\Controllers\Admin\Users\DeactivateUserController;
 use App\Web\API\V1\Controllers\Admin\Users\DisableUserController;
@@ -209,6 +211,39 @@ Route::middleware(['auth:sanctum', 'tenant'])->prefix('admin/users')->name('admi
         ->whereNumber('userId')->name('deactivate');
     Route::post('{userId}/restore', RestoreUserController::class)
         ->whereNumber('userId')->name('restore');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 2B — Roles management (tenant-admin surface).
+//
+// Sibling group to /admin/users — same auth:sanctum + tenant chain,
+// no company middleware. Roles are tenant-scoped (custom rows have
+// team_id=tenant_id; system rows are global) and not company-scoped.
+// Per CLAUDE.md §10.6 Phase 2A refinement: factor a feature into a
+// sibling route group when its middleware needs differ from the
+// parent's heavier chain.
+//
+// Gating: /admin/roles/* uses roles.view at controller access level
+// (404 for non-admin per §10.6). Action-specific gates
+// (roles.create / roles.update / roles.delete) fire at 403 within
+// each method.
+// ─────────────────────────────────────────────────────────────────────────────
+Route::middleware(['auth:sanctum', 'tenant'])->prefix('admin/roles')->name('admin.roles.')->group(function (): void {
+    Route::get('/', [RoleController::class, 'index'])->name('index');
+    Route::post('/', [RoleController::class, 'store'])->name('store');
+
+    // Impact endpoint — read-side, gated on roles.update (the action
+    // it precedes). Lives BEFORE the {role} resource routes so the
+    // literal 'impact' segment doesn't conflict with the role-id binding.
+    Route::get('{role}/impact', RoleImpactController::class)
+        ->whereNumber('role')->name('impact');
+
+    Route::get('{role}', [RoleController::class, 'show'])
+        ->whereNumber('role')->name('show');
+    Route::patch('{role}', [RoleController::class, 'update'])
+        ->whereNumber('role')->name('update');
+    Route::delete('{role}', [RoleController::class, 'destroy'])
+        ->whereNumber('role')->name('destroy');
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
