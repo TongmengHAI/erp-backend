@@ -12,6 +12,7 @@ use App\Support\Tenancy\TenantContext;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Support\Facades\Mail;
 use Spatie\Permission\Models\Role;
+use Spatie\Permission\PermissionRegistrar;
 
 /**
  * Sends the invitation email when a UserInvited event fires.
@@ -48,6 +49,24 @@ final class SendInvitationEmailListener implements ShouldQueue
         $invitation = $event->invitation;
 
         $this->tenantContext->asSystem(function () use ($event, $invitation): void {
+            // Phase 2B walk-fix: queued jobs have no HTTP request, so
+            // PermissionRegistrar's team_id is unset. Spatie's
+            // findByParam (vendor/spatie/laravel-permission/src/Models/
+            // Role.php:170) then queries
+            //   WHERE team_id IS NULL OR team_id = NULL
+            // — the second clause is FALSE in SQL — so only SYSTEM roles
+            // (team_id=NULL) are findable; CUSTOM roles fall through
+            // with RoleDoesNotExist. Latent bug before Phase 2B because
+            // only system roles existed; Phase 2B Session 1's per-tenant
+            // custom roles (team_id=$tenant_id) activate it.
+            //
+            // The invitation already pins the correct tenant; set the
+            // registrar's team_id from invitation.tenant_id so Spatie's
+            // role lookup matches both system AND custom rows for the
+            // invited tenant.
+            app(PermissionRegistrar::class)
+                ->setPermissionsTeamId($invitation->tenant_id);
+
             // Fetch the related rows by FK explicitly. The Invitation's
             // FKs are NOT NULL (enforced by the migration), so the
             // findOrFail calls succeed for any committed invitation —
