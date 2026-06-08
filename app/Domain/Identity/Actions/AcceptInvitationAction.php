@@ -13,6 +13,7 @@ use App\Support\Tenancy\TenantContext;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Spatie\Permission\Models\Role;
+use Spatie\Permission\PermissionRegistrar;
 
 /**
  * Accept an invitation:
@@ -63,6 +64,22 @@ final class AcceptInvitationAction
 
         return DB::transaction(function () use ($invitation, $password, $name): InvitationAccepted {
             return $this->tenantContext->asSystem(function () use ($invitation, $password, $name): InvitationAccepted {
+                // Phase 2B walk-fix: this is a PUBLIC endpoint (no auth
+                // → no middleware → PermissionRegistrar's team_id is
+                // null). Spatie's findByParam then filters
+                //   WHERE team_id IS NULL OR team_id = NULL
+                // — second clause is FALSE in SQL — so only SYSTEM roles
+                // are findable. CUSTOM roles (team_id=$tenant_id) throw
+                // RoleDoesNotExist. Latent before Phase 2B; activated by
+                // per-tenant custom roles.
+                //
+                // Same shape + same fix as SendInvitationEmailListener
+                // (Phase 2B walk-fix b91ba97). The invitation pins the
+                // tenant; set the registrar's team_id from it BEFORE
+                // findById so custom + system roles both resolve.
+                app(PermissionRegistrar::class)
+                    ->setPermissionsTeamId($invitation->tenant_id);
+
                 $user = User::query()->create([
                     'name' => $name ?? $invitation->name ?? $invitation->email,
                     'email' => $invitation->email,
